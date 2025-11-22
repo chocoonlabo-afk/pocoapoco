@@ -23,7 +23,7 @@ export const LS_CHILDREN = "pocopoco_children";
 export const LS_CURRENT_CHILD_ID = "pocopoco_current_child_id";
 
 export const LS_HISTORY = "pocopoco_history";
-export const LS_BIRTHDAY = "pocopoco_calendar_birthday";
+
 export const LS_SONGS = "pocopoco_songs"; // 曲データ（子どもごと）
 export const LS_TASKS = "pocopoco_tasks"; // タスク定義
 
