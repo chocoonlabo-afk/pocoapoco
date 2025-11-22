@@ -1,0 +1,472 @@
+// src/app/page.js
+"use client";
+
+import { useEffect, useState } from "react";
+import { t, getLangFromStorage } from "./lib/i18n";
+
+// 設定とそろえる初期タスク
+const DEFAULT_TASKS = [
+  { id: "task_violin", label: "バイオリン", icon: "🎻" },
+  { id: "task_piano", label: "ピアノ", icon: "🎹" },
+  { id: "task_solfege", label: "ソルフェージュ", icon: "📝" },
+  { id: "task_japanese", label: "国語", icon: "📖" },
+  { id: "task_math", label: "算数", icon: "🔢" },
+  { id: "task_english", label: "英語", icon: "🇬🇧" },
+];
+
+// 週間ボードと共通のキー
+const WEEKLY_STORAGE_KEY = "pocoapoco_timetable_by_child";
+const PERIOD_COUNT = 15;
+const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+export default function HomePage() {
+  const [lang, setLang] = useState("jp");
+  const [role, setRole] = useState("parent");
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("");
+  const [tasks, setTasks] = useState(DEFAULT_TASKS);
+  const [eventData, setEventData] = useState(null);
+
+  const [todayTotalSec, setTodayTotalSec] = useState(0);
+  const [todayTotalCount, setTodayTotalCount] = useState(0);
+
+  // タスクごとの今日の合計秒数 { taskIdOrLabel: seconds }
+  const [todayTaskSeconds, setTodayTaskSeconds] = useState({});
+
+  // 今日の週間ボード（その曜日の列）用
+  const [todaySlots, setTodaySlots] = useState(Array(PERIOD_COUNT).fill(""));
+
+  // 初期ロード
+  useEffect(() => {
+    // 言語
+    const savedLang = getLangFromStorage();
+    setLang(savedLang);
+
+    // 親/子モード
+    const savedRole = localStorage.getItem("pocopoco_role");
+    if (savedRole === "child") setRole("child");
+
+    // 子ども一覧
+    const rawChildren = localStorage.getItem("pocopoco_children");
+    if (rawChildren) {
+      try {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) setChildren(arr);
+      } catch (e) {
+        console.warn("children parse error", e);
+      }
+    }
+
+    // 表示中の子
+    const savedCurrent =
+      localStorage.getItem("pocopoco_current_child_id") || "";
+    if (savedCurrent) {
+      setCurrentChildId(savedCurrent);
+    }
+
+    // タスク
+    const rawTasks = localStorage.getItem("pocopoco_tasks");
+    if (rawTasks) {
+      try {
+        const arr = JSON.parse(rawTasks);
+        if (Array.isArray(arr) && arr.length > 0) {
+          setTasks(arr);
+        }
+      } catch (e) {
+        console.warn("tasks parse error", e);
+      }
+    }
+
+    calcTodayTotals(savedCurrent || "");
+    loadHomeEvent(savedCurrent || "");
+    loadTodayTimetable(savedCurrent || "");
+  }, []);
+
+  // currentChildId が変わったときも再計算
+  useEffect(() => {
+    calcTodayTotals(currentChildId || "");
+    loadHomeEvent(currentChildId || "");
+    loadTodayTimetable(currentChildId || "");
+  }, [currentChildId]);
+
+  // イベント（新形式）
+  function loadHomeEvent(childId) {
+    const rawEvents = localStorage.getItem("pocopoco_events");
+    if (rawEvents) {
+      try {
+        const arr = JSON.parse(rawEvents);
+        if (Array.isArray(arr)) {
+          const childKey = childId || "all";
+
+          let homeEv =
+            arr.find(
+              (e) =>
+                e.home === true &&
+                (e.child_id === childKey ||
+                  (childKey === "all" &&
+                    (!e.child_id || e.child_id === "all")))
+            ) || null;
+
+          if (!homeEv) {
+            homeEv =
+              arr.find(
+                (e) =>
+                  e.child_id === childKey ||
+                  (childKey === "all" &&
+                    (!e.child_id || e.child_id === "all"))
+              ) || null;
+          }
+
+          if (!homeEv && arr.length > 0) {
+            homeEv =
+              arr.find((e) => !e.child_id || e.child_id === "all") || arr[0];
+          }
+
+          if (homeEv) {
+            setEventData({ title: homeEv.title, date: homeEv.date });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("events parse error", e);
+      }
+    }
+
+    // 旧データ互換
+    const rawOld = localStorage.getItem("pocopoco_event");
+    if (rawOld) {
+      try {
+        const evt = JSON.parse(rawOld);
+        setEventData(evt);
+      } catch (e) {
+        console.warn("old event parse error", e);
+      }
+    }
+  }
+
+  // きょうの合計時間＆回数＋タスク別時間
+  function calcTodayTotals(childId) {
+    const rawHistory = localStorage.getItem("pocopoco_history");
+    const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    if (!rawHistory) {
+      setTodayTotalSec(0);
+      setTodayTotalCount(0);
+      setTodayTaskSeconds({});
+      return;
+    }
+    try {
+      const arr = JSON.parse(rawHistory);
+      if (!Array.isArray(arr)) return;
+      let secSum = 0;
+      let countSum = 0;
+      const perTask = {};
+
+      for (const r of arr) {
+        if (!r.startedAt) continue;
+        const d = r.startedAt.slice(0, 10);
+        if (d !== todayStr) continue;
+        if (childId && r.child_id && r.child_id !== childId) continue;
+
+        const sec = Number(r.seconds || 0);
+        secSum += sec;
+        countSum += Number(r.count || 0);
+
+        const key = r.task_id || r.task_title || r.task || "";
+        if (key) {
+          perTask[key] = (perTask[key] || 0) + sec;
+        }
+      }
+      setTodayTotalSec(secSum);
+      setTodayTotalCount(countSum);
+      setTodayTaskSeconds(perTask);
+    } catch (e) {
+      console.warn("history parse error", e);
+    }
+  }
+
+  // 今日の週間ボード列
+  function loadTodayTimetable(childId) {
+    const raw = localStorage.getItem(WEEKLY_STORAGE_KEY);
+    if (!raw) {
+      setTodaySlots(Array(PERIOD_COUNT).fill(""));
+      return;
+    }
+    try {
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== "object") {
+        setTodaySlots(Array(PERIOD_COUNT).fill(""));
+        return;
+      }
+
+      const cfg =
+        (childId && data[childId]) ||
+        data[childId || ""] ||
+        null;
+
+      if (!cfg || !cfg.cells) {
+        setTodaySlots(Array(PERIOD_COUNT).fill(""));
+        return;
+      }
+
+      const jsDay = new Date().getDay(); // 0:日〜6:土
+      const dayKey = DAY_KEYS[jsDay];
+      const col = cfg.cells[dayKey] || [];
+
+      const slots = Array.from({ length: PERIOD_COUNT }).map(
+        (_, i) => col[i] || ""
+      );
+      setTodaySlots(slots);
+    } catch (e) {
+      console.warn("weekly timetable parse error", e);
+      setTodaySlots(Array(PERIOD_COUNT).fill(""));
+    }
+  }
+
+  const currentChildName =
+    children.find((c) => c.id === currentChildId)?.name || "";
+
+  const todayMinutes = Math.floor(todayTotalSec / 60);
+  const todaySeconds = todayTotalSec % 60;
+
+  const todayLabel = lang === "en" ? "Today" : "今日";
+
+  return (
+    <main
+      style={{
+        padding: "20px 16px 80px",
+        maxWidth: "520px",
+        margin: "0 auto",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      {/* タイトル（子どもの名前だけ） */}
+      <header style={{ marginBottom: "16px" }}>
+        <h1 style={{ fontSize: "20px", fontWeight: 600, marginBottom: "4px" }}>
+          {currentChildName || "pocoapoco"}
+        </h1>
+        {!currentChildName && (
+          <p style={{ fontSize: "12px", color: "#999" }}>
+            （こどもが未選択です。設定で選ぶとここに表示されます）
+          </p>
+        )}
+      </header>
+
+      {/* 左：今日の合計＆イベント　右：今日の週間ボード */}
+      <section
+        style={{
+          display: "flex",
+          gap: "12px",
+          alignItems: "stretch",
+          marginBottom: "20px",
+          flexWrap: "wrap",
+        }}
+      >
+        {/* 左カラム */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+            flex: "0 0 220px",
+            maxWidth: "100%",
+          }}
+        >
+          {/* 今日の合計 */}
+          <section
+            style={{
+              background: "#f7f1ff",
+              border: "1px solid #e1d1ff",
+              borderRadius: "14px",
+              padding: "14px 14px 8px",
+            }}
+          >
+            <div style={{ fontSize: "13px", marginBottom: "6px" }}>
+              {t("todayPractice", lang)}
+            </div>
+            <div
+              style={{ display: "flex", alignItems: "baseline", gap: "12px" }}
+            >
+              <div style={{ fontSize: "30px", fontWeight: 700 }}>
+                {todayMinutes}:{todaySeconds.toString().padStart(2, "0")}
+              </div>
+              <div style={{ fontSize: "12px", color: "#666" }}>
+                {t("sessionsCount", lang)}
+                {todayTotalCount}
+              </div>
+            </div>
+          </section>
+
+          {/* イベント */}
+          {eventData && eventData.title ? (
+            <section
+              style={{
+                background: "#fff3e0",
+                border: "1px solid #ffe0b2",
+                borderRadius: "14px",
+                padding: "12px 14px",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "12px",
+                  color: "#f57c00",
+                  marginBottom: "4px",
+                }}
+              >
+                {t("nextEvent", lang)}
+              </div>
+              <div style={{ fontSize: "14px", fontWeight: 600 }}>
+                {eventData.title}
+              </div>
+              {eventData.date && (
+                <div style={{ fontSize: "12px", marginTop: "4px" }}>
+                  {eventData.date}
+                </div>
+              )}
+            </section>
+          ) : (
+            <section
+              style={{
+                background: "#f5f5f5",
+                borderRadius: "14px",
+                padding: "12px 14px",
+              }}
+            >
+              <div style={{ fontSize: "12px", marginBottom: "4px" }}>
+                {t("noEventYetTitle", lang)}
+              </div>
+              <div style={{ fontSize: "11px", color: "#777" }}>
+                {t("noEventYetHint", lang)}
+              </div>
+            </section>
+          )}
+        </div>
+
+        {/* 右カラム：今日の週間ボード */}
+        <div
+          style={{
+            flex: "1 1 0",
+            minWidth: "180px",
+            backgroundColor: "#ffffff",
+            borderRadius: "14px",
+            padding: "12px 14px",
+            boxShadow: "0 4px 10px rgba(0,0,0,0.03)",
+            border: "1px solid #f3e8ff",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "13px",
+              fontWeight: 600,
+              marginBottom: "6px",
+            }}
+          >
+            {lang === "en" ? "Today’s WeeklyBoard" : "今日の週間ボード"}
+          </div>
+          <div
+            style={{
+              fontSize: "11px",
+              color: "#888",
+              marginBottom: "6px",
+            }}
+          >
+            {todayLabel}の予定です（週間ボードから編集できます）
+          </div>
+          <div
+            style={{
+              maxHeight: "260px",
+              overflowY: "auto",
+              paddingRight: "4px",
+            }}
+          >
+            {todaySlots.every((s) => !s) ? (
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "#aaa",
+                  padding: "4px 0",
+                }}
+              >
+                まだ登録がありません。週間ボードで時間割やToDoを追加できます。
+              </div>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {todaySlots.map((slot, idx) => (
+                  <li
+                    key={idx}
+                    style={{
+                      fontSize: "12px",
+                      padding: "3px 0",
+                      borderBottom: "1px solid #f3f4f6",
+                      minHeight: "18px",
+                    }}
+                  >
+                    {slot || "　"}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* タスク一覧 */}
+      <section style={{ marginBottom: "20px" }}>
+        <h2 style={{ fontSize: "14px", fontWeight: 600, marginBottom: "8px" }}>
+          {t("practiceMenuTitle", lang)}
+        </h2>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {tasks.map((task) => {
+            const secForTask =
+              todayTaskSeconds[task.id] ?? todayTaskSeconds[task.label] ?? 0;
+            const mm = Math.floor(secForTask / 60);
+            const ss = secForTask % 60;
+
+            return (
+              <a
+                key={task.id}
+                href={`/record?task=${encodeURIComponent(
+                  task.label
+                )}&childId=${encodeURIComponent(
+                  currentChildId || ""
+                )}&autoStart=1`}
+                style={{
+                  display: "block",
+                  background: "#fff",
+                  border: "1px solid #eee",
+                  borderRadius: "12px",
+                  padding: "12px 10px",
+                  textDecoration: "none",
+                  color: "#333",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+                }}
+              >
+                <div style={{ fontSize: "20px", marginBottom: "4px" }}>
+                  {task.icon || "🎵"}
+                </div>
+                <div style={{ fontSize: "13px", fontWeight: 600 }}>
+                  {task.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#777",
+                    marginTop: "4px",
+                  }}
+                >
+                  {todayLabel} {mm}:{ss.toString().padStart(2, "0")}
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      </section>
+    </main>
+  );
+}

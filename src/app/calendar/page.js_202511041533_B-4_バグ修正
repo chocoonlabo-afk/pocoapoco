@@ -1,0 +1,477 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+/** 日付→ "YYYY-MM-DD" */
+function dateKeyFromDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** 月ごとの週配列をつくる */
+function buildCalendarWeeks(targetDate) {
+  const year = targetDate.getFullYear();
+  const month = targetDate.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const firstWeekday = firstDay.getDay();
+  const lastDay = new Date(year, month + 1, 0);
+  const lastDateNum = lastDay.getDate();
+  const cells = [];
+
+  // 前の月の空白
+  for (let i = 0; i < firstWeekday; i++) cells.push(null);
+  // 当月の日付
+  for (let d = 1; d <= lastDateNum; d++) cells.push(new Date(year, month, d));
+
+  // 7つずつに分割
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    weeks.push(cells.slice(i, i + 7));
+  }
+  return weeks;
+}
+
+/** 分数→色レベル */
+function getBadgeInfo(minutes) {
+  if (minutes >= 60)
+    return {
+      bgColor: "#ffe0e0",
+      borderColor: "#ff8080",
+      textColor: "#a00000",
+      level: "gold",
+    };
+  if (minutes >= 30)
+    return {
+      bgColor: "#fff3cc",
+      borderColor: "#ffd24d",
+      textColor: "#6d4c00",
+      level: "silver",
+    };
+  if (minutes >= 15)
+    return {
+      bgColor: "#eaffea",
+      borderColor: "#9de09d",
+      textColor: "#064e00",
+      level: "bronze",
+    };
+  if (minutes > 0)
+    return {
+      bgColor: "#eef4ff",
+      borderColor: "#aac0ff",
+      textColor: "#001a66",
+      level: "light",
+    };
+  return {
+    bgColor: "#fff",
+    borderColor: "#ddd",
+    textColor: "#999",
+    level: "none",
+  };
+}
+
+/** 誕生日判定 ("YYYY-MM-DD" と月日が一致するか) */
+function isSameMonthDay(date, birthdayStr) {
+  if (!birthdayStr) return false;
+  const [, m, d] = birthdayStr.split("-");
+  if (!m || !d) return false;
+  return (
+    date.getMonth() + 1 === parseInt(m, 10) &&
+    date.getDate() === parseInt(d, 10)
+  );
+}
+
+/** イベント配列をロードする（複数対応＋後方互換） */
+function loadEvents() {
+  // 新：配列
+  try {
+    const rawList = localStorage.getItem("pocopoco_events");
+    if (rawList) {
+      const arr = JSON.parse(rawList);
+      if (Array.isArray(arr)) {
+        // date があるものだけ
+        return arr.filter((ev) => ev && ev.date);
+      }
+    }
+  } catch {
+    /* noop */
+  }
+
+  // 旧：1件だけ
+  try {
+    const rawSingle = localStorage.getItem("pocopoco_event");
+    if (rawSingle) {
+      const obj = JSON.parse(rawSingle);
+      if (obj?.date) {
+        return [
+          {
+            id: "legacy",
+            title: obj.title || "イベント",
+            date: obj.date,
+            mark: obj.mark || "EV",
+          },
+        ];
+      }
+    }
+  } catch {
+    /* noop */
+  }
+
+  return [];
+}
+
+/** カレンダーに反映するタスクIDのリストをロードする */
+function loadCalendarTaskFilter() {
+  try {
+    const raw = localStorage.getItem("pocopoco_calendar_task_filter");
+    if (!raw) return null; // 設定がなければ全タスク集計
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return arr;
+  } catch {
+    /* noop */
+  }
+  return null;
+}
+
+export default function CalendarPage() {
+  const [currentMonthDate, setCurrentMonthDate] = useState(() => new Date());
+  // { "YYYY-MM-DD": { totalMin, sessions } }
+  const [dailySummary, setDailySummary] = useState({});
+  // 複数イベント
+  const [events, setEvents] = useState([]);
+  // 誕生日
+  const [birthdayStr, setBirthdayStr] = useState("");
+  // カレンダーに出すタスクIDフィルタ
+  const [calendarTaskFilter, setCalendarTaskFilter] = useState(null);
+
+  useEffect(() => {
+    try {
+      // 1) イベント（複数）
+      const evts = loadEvents();
+      setEvents(evts);
+
+      // 2) カレンダーのタスクフィルタ
+      const filter = loadCalendarTaskFilter();
+      setCalendarTaskFilter(filter);
+
+      // 3) 練習履歴を読み込んで日付ごとに集計
+      const raw = localStorage.getItem("pocopoco_history");
+      if (raw) {
+        const all = JSON.parse(raw);
+        const summary = {};
+        for (const s of all) {
+          if (!s.startedAt) continue;
+
+          // タスクのフィルタが指定されている場合、該当しないタスクは飛ばす
+          if (
+            filter &&
+            filter.length > 0 &&
+            s.task_id &&
+            !filter.includes(s.task_id)
+          ) {
+            continue;
+          }
+
+          const key = dateKeyFromDate(new Date(s.startedAt));
+          summary[key] = summary[key] || { totalSec: 0, sessions: 0 };
+          summary[key].totalSec += s.seconds || 0;
+          summary[key].sessions++;
+        }
+        const mins = {};
+        for (const k in summary) {
+          mins[k] = {
+            totalMin: Math.floor(summary[k].totalSec / 60),
+            sessions: summary[k].sessions,
+          };
+        }
+        setDailySummary(mins);
+      }
+
+      // 4) 誕生日
+      const bd = localStorage.getItem("pocopoco_birthday");
+      if (bd) setBirthdayStr(bd);
+    } catch (e) {
+      console.error("カレンダーデータのロードに失敗しました", e);
+    }
+  }, []);
+
+  const todayKey = dateKeyFromDate(new Date());
+  const titleYear = currentMonthDate.getFullYear();
+  const titleMonth = currentMonthDate.getMonth() + 1;
+  const weeks = buildCalendarWeeks(currentMonthDate);
+
+  function goPrevMonth() {
+    setCurrentMonthDate(
+      (prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1)
+    );
+  }
+  function goNextMonth() {
+    setCurrentMonthDate(
+      (prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1)
+    );
+  }
+
+  // 今月のイベント一覧（上に出す用）
+  const currentMonthStr = `${titleYear}-${String(titleMonth).padStart(2, "0")}`;
+  const eventsThisMonth = events.filter(
+    (ev) => ev.date && ev.date.startsWith(currentMonthStr)
+  );
+
+  return (
+    <main
+      style={{
+        padding: "24px 16px 80px",
+        fontFamily: "system-ui, sans-serif",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      {/* ヘッダー */}
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "16px",
+        }}
+      >
+        <button onClick={goPrevMonth} style={navBtnStyle}>
+          ←
+        </button>
+        <div style={{ textAlign: "center", lineHeight: 1.3 }}>
+          <div style={{ fontSize: "16px", fontWeight: "600" }}>
+            {titleYear}年 {titleMonth}月
+          </div>
+          <div style={{ fontSize: "12px", color: "#666" }}>
+            えらんだタスクだけが はいけいに色がつきます
+          </div>
+        </div>
+        <button onClick={goNextMonth} style={navBtnStyle}>
+          →
+        </button>
+      </header>
+
+      {/* 今月のイベント（複数） */}
+      {eventsThisMonth.length > 0 && (
+        <div
+          style={{
+            border: "1px solid #ffe0a1",
+            background:
+              "linear-gradient(135deg, rgba(255,251,235,0.95), rgba(255,245,200,0.8))",
+            borderRadius: "10px",
+            padding: "10px 12px",
+            marginBottom: "12px",
+          }}
+        >
+          <div
+            style={{ fontSize: "13px", color: "#a15a00", marginBottom: "6px" }}
+          >
+            📣 今月のイベント
+          </div>
+          {eventsThisMonth.map((ev) => (
+            <div
+              key={ev.id || ev.date}
+              style={{ display: "flex", gap: "8px", alignItems: "center" }}
+            >
+              <div style={{ fontSize: "16px" }}>{ev.mark || "📌"}</div>
+              <div>
+                <div
+                  style={{
+                    fontSize: "14px",
+                    fontWeight: "600",
+                    color: "#6d4c00",
+                  }}
+                >
+                  {ev.title || "(タイトルなし)"}
+                </div>
+                <div style={{ fontSize: "12px", color: "#6d4c00" }}>
+                  {ev.date}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 曜日 */}
+      <div style={weekdayRowStyle}>
+        {["日", "月", "火", "水", "木", "金", "土"].map((d) => (
+          <div key={d}>{d}</div>
+        ))}
+      </div>
+
+      {/* カレンダー */}
+      <div style={{ display: "grid", rowGap: "8px" }}>
+        {weeks.map((week, wIdx) => (
+          <div
+            key={wIdx}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(7, 1fr)",
+              columnGap: "8px",
+            }}
+          >
+            {week.map((cellDate, cIdx) => {
+              if (!cellDate) {
+                return <div key={cIdx} style={emptyCellStyle} />;
+              }
+
+              const key = dateKeyFromDate(cellDate);
+              const info = dailySummary[key];
+              const minutes = info ? info.totalMin : 0;
+              const { bgColor, borderColor, textColor, level } =
+                getBadgeInfo(minutes);
+
+              const isToday = key === todayKey;
+              const outline = isToday ? "0 0 0 2px rgba(138,43,226,0.6)" : "none";
+
+              // この日のイベント（複数ありえる）
+              const dayEvents = events.filter((ev) => ev.date === key);
+
+              // 誕生日？
+              const isBirthday = isSameMonthDay(cellDate, birthdayStr);
+
+              return (
+                <div
+                  key={cIdx}
+                  style={{
+                    minHeight: "68px",
+                    borderRadius: "8px",
+                    border: `1px solid ${borderColor}`,
+                    background: bgColor,
+                    fontSize: "12px",
+                    padding: "6px",
+                    lineHeight: 1.4,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    color: textColor,
+                    boxShadow: outline,
+                    position: "relative",
+                  }}
+                >
+                  {/* 日付とイベントマーク(上部) */}
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "4px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontWeight: "600",
+                        textAlign: "left",
+                        fontSize: "12px",
+                        wordBreak: "keep-all",
+                      }}
+                    >
+                      {cellDate.getDate()}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "2px",
+                        flexWrap: "wrap",
+                        justifyContent: "flex-end",
+                      }}
+                    >
+                      {dayEvents.map((ev) => (
+                        <span
+                          key={ev.id || ev.title}
+                          title={ev.title}
+                          style={{
+                            fontSize: "11px",
+                            backgroundColor: "#ff9800",
+                            color: "#fff",
+                            borderRadius: "999px",
+                            padding: "1px 5px",
+                            lineHeight: 1.1,
+                          }}
+                        >
+                          {ev.mark || "EV"}
+                        </span>
+                      ))}
+                      {isBirthday && (
+                        <span
+                          style={{
+                            fontSize: "11px",
+                            backgroundColor: "#ff80ab",
+                            color: "#fff",
+                            borderRadius: "999px",
+                            padding: "1px 5px",
+                          }}
+                        >
+                          🎂
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 下部右寄せ */}
+                  <div style={{ textAlign: "right", fontSize: "11px" }}>
+                    {minutes > 0
+                      ? `${minutes}分${
+                          level === "gold"
+                            ? "🥇"
+                            : level === "silver"
+                            ? "🥈"
+                            : level === "bronze"
+                            ? "🥉"
+                            : "⭐"
+                        }`
+                      : "・"}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* 凡例 */}
+      <div
+        style={{
+          fontSize: "11px",
+          color: "#777",
+          marginTop: "16px",
+          lineHeight: 1.5,
+          textAlign: "center",
+        }}
+      >
+        🥉15分〜 / 🥈30分〜 / 🥇60分〜
+        <br />
+        イベントのマークは設定で決めたものが表示されます
+        <br />
+        カレンダー集計タスクを設定していない場合はすべてのタスクを合計します
+      </div>
+    </main>
+  );
+}
+
+/* ---------- スタイル ---------- */
+const navBtnStyle = {
+  border: "1px solid #ccc",
+  background: "#fff",
+  borderRadius: "8px",
+  padding: "6px 10px",
+  fontSize: "14px",
+  cursor: "pointer",
+  minWidth: "44px",
+};
+const weekdayRowStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(7, 1fr)",
+  textAlign: "center",
+  fontSize: "12px",
+  fontWeight: "600",
+  color: "#666",
+  marginBottom: "8px",
+};
+const emptyCellStyle = {
+  minHeight: "60px",
+  borderRadius: "8px",
+  background: "#f4f4f4",
+  border: "1px solid #ddd",
+};

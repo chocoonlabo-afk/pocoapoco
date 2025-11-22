@@ -1,0 +1,164 @@
+// src/app/lib/i18n.js
+"use client";
+
+// -----------------------------------------
+// 言語設定と辞書
+// -----------------------------------------
+export const SUPPORTED_LANGS = ["jp", "hiragana", "en"];
+const STORAGE_KEY = "pocopoco_lang";
+
+// 共通辞書（翻訳キーは自由に追加可）
+const dict = {
+  todayLabel: {
+    jp: "今日の練習",
+    hiragana: "きょうの れんしゅう",
+    en: "Today's practice",
+  },
+  minutesSuffix: {
+    jp: "分",
+    hiragana: "ふん",
+    en: "min",
+  },
+  sessionsCount: {
+    jp: "記録：",
+    hiragana: "きろく：",
+    en: "sessions:",
+  },
+  limitPerDay: {
+    jp: " 件",
+    hiragana: " けん",
+    en: "",
+  },
+  nextEventCardTitle: {
+    jp: "次のイベント",
+    hiragana: "つぎの いべんと",
+    en: "Next event",
+  },
+  noEventYetTitle: {
+    jp: "イベントは まだ ありません",
+    hiragana: "いべんとは まだ ありません",
+    en: "No event yet",
+  },
+  noEventYetHint: {
+    jp: "設定画面で イベントを 入力すると ここに 表示されます。",
+    hiragana: "せっていがめんで いべんとを いれると ここに でます。",
+    en: "Add an event in Settings to show it here.",
+  },
+  daysLeftSuffix: {
+    jp: "日 ご ほんばん",
+    hiragana: "にち ご ほんばん",
+    en: "days to go",
+  },
+  practiceMenuTitle: {
+    jp: "練習メニュー",
+    hiragana: "れんしゅう めにゅー",
+    en: "Practice menu",
+  },
+  tapToRecord: {
+    jp: "タップで 記録",
+    hiragana: "たっぷで きろく",
+    en: "Tap to record",
+  },
+  badgeBronze: {
+    jp: "15分がんばった！",
+    hiragana: "15ふん がんばった！",
+    en: "15 min done!",
+  },
+  badgeSilver: {
+    jp: "30分すごい！",
+    hiragana: "30ふん すごい！",
+    en: "30 min, great!",
+  },
+  badgeGold: {
+    jp: "60分えらい！",
+    hiragana: "60ふん えらい！",
+    en: "60 min, amazing!",
+  },
+
+  // 設定
+  settingsTitle: {
+    jp: "設定",
+    hiragana: "せってい",
+    en: "Settings",
+  },
+  settingsLang: {
+    jp: "表示言語",
+    hiragana: "ひょうじ げんご",
+    en: "Language",
+  },
+  settingsSave: {
+    jp: "保存",
+    hiragana: "ほぞん",
+    en: "Save",
+  },
+
+  // ログイン
+  loginTitle: {
+    jp: "pocopoco にログインする",
+    hiragana: "pocopoco に ろぐいんする",
+    en: "Sign in to pocopoco",
+  },
+  loginParent: {
+    jp: "保護者としてログインする",
+    hiragana: "保護者としてログインする",
+    en: "Enter as parent",
+  },
+  loginChild: {
+    jp: "子供としてログインする",
+    hiragana: "こども として ろぐいんする",
+    en: "Enter as child",
+  },
+};
+
+// -----------------------------------------
+// 言語を取得
+// -----------------------------------------
+export function getLangFromStorage() {
+  if (typeof window === "undefined") return "jp";
+  const saved = window.localStorage.getItem(STORAGE_KEY);
+  if (saved && SUPPORTED_LANGS.includes(saved)) return saved;
+  return "jp";
+}
+
+// -----------------------------------------
+// 言語を保存（呼び出し側: setLangToStorage(lang)）
+// -----------------------------------------
+export function setLangToStorage(lang) {
+  if (typeof window === "undefined") return;
+  const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "jp";
+  try {
+    window.localStorage.setItem(STORAGE_KEY, useLang);
+  } catch (e) {
+    console.error("Failed to save language:", e);
+  }
+}
+
+// -----------------------------------------
+// 翻訳関数
+// -----------------------------------------
+export function t(key, lang) {
+  const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "jp";
+  const entry = dict[key];
+  if (!entry) return key;
+  return entry[useLang] ?? entry["jp"] ?? key;
+}
+
+// -----------------------------------------
+// 辞書の追加用ヘルパー
+// -----------------------------------------
+export function addTranslations(newDict) {
+  Object.keys(newDict).forEach((k) => {
+    dict[k] = { ...(dict[k] || {}), ...newDict[k] };
+  });
+}
+
+// -----------------------------------------
+// デフォルトエクスポート（import崩壊防止）
+// -----------------------------------------
+export default {
+  SUPPORTED_LANGS,
+  getLangFromStorage,
+  setLangToStorage,
+  t,
+  addTranslations,
+};

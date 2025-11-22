@@ -1,0 +1,579 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+
+// ---------- ユーティリティ ----------
+
+// CSVを作る（エクスポート用）
+function exportToCSV(records) {
+  if (!records || records.length === 0) {
+    alert("きろくがありません。");
+    return;
+  }
+
+  // ヘッダー
+  const header = ["date", "task", "minutes", "count", "memo"];
+
+  // 1行ずつ整形
+  const rows = records.map((r) => {
+    const dateStr = r.startedAt
+      ? new Date(r.startedAt).toLocaleString("ja-JP")
+      : "";
+    const minutes = Math.floor((r.seconds || 0) / 60);
+    const count = r.count || 0;
+    const memo = r.memo || "";
+    const task = r.task || "";
+
+    // CSVのセルはダブルクォートで囲む
+    return [
+      `"${dateStr}"`,
+      `"${task.replace(/"/g, '""')}"`,
+      `"${minutes}"`,
+      `"${count}"`,
+      `"${memo.replace(/"/g, '""')}"`,
+    ].join(",");
+  });
+
+  const csv = [header.join(","), ...rows].join("\n");
+
+  // ダウンロード処理
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const today = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `pocopoco_history_${today}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// CSVテキストを配列に変換する（すごくシンプルなCSVパーサ）
+function parseCSV(csvText) {
+  // 行に分解
+  const lines = csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length < 2) {
+    throw new Error("CSVの行がたりません。");
+  }
+
+  // 1行目はヘッダー
+  const header = lines[0].split(",").map((h) => h.replace(/^"|"$/g, ""));
+  // 想定ヘッダー
+  // ["date","task","minutes","count","memo"]
+
+  // ヘッダーざっくりチェック
+  if (
+    header[0] !== "date" ||
+    header[1] !== "task" ||
+    header[2] !== "minutes" ||
+    header[3] !== "count" ||
+    header[4] !== "memo"
+  ) {
+    throw new Error("CSVのヘッダーが正しくありません。");
+  }
+
+  // 2行目以降をデータとして読む
+  const records = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    // ここでは「カンマ区切り、セルはダブルクォートあり」という前提で
+    // シンプルにsplitします。
+    // （メモ内にカンマが入ると正確に分けるのは少し難しくなるけど、
+    //   まずは実用優先の簡易版とします）
+    const rawCells = lines[i].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    // それぞれのセルの前後の " を外す
+    const cells = rawCells.map((c) => c.replace(/^"|"$/g, ""));
+
+    const [dateStr, task, minutesStr, countStr, memo] = cells;
+
+    // 日付文字列をISO形式に変換して startedAt に使う
+    // ここでは new Date(dateStr) に頼る（ローカルタイムをISO化）
+    const startedDate = new Date(dateStr);
+    if (isNaN(startedDate.getTime())) {
+      console.warn("日付がパースできません:", dateStr);
+      continue; // この行はスキップ
+    }
+
+    const seconds = parseInt(minutesStr, 10) * 60 || 0;
+    const count = parseInt(countStr, 10) || 0;
+
+    records.push({
+      task: task || "",
+      seconds,
+      count,
+      memo: memo || "",
+      startedAt: startedDate.toISOString(),
+    });
+  }
+
+  return records;
+}
+
+// 重複をある程度防ぎながらマージする
+function mergeHistory(oldArr, newArr) {
+  const result = [...oldArr];
+
+  for (const rec of newArr) {
+    const exists = result.some(
+      (r) =>
+        r.startedAt === rec.startedAt &&
+        r.task === rec.task &&
+        (r.seconds || 0) === (rec.seconds || 0) &&
+        (r.count || 0) === (rec.count || 0)
+    );
+    if (!exists) {
+      result.push(rec);
+    }
+  }
+
+  return result;
+}
+
+// ---------- ページ本体 ----------
+
+export default function SettingsPage() {
+  // 親の4桁コード
+  const [parentCode, setParentCode] = useState("");
+
+  // 言語（ひらがな / 日本語 / 英語） ← 実装済みのものに合わせる場合は
+  // pocopoco_lang を使ってもOK。ここでは "jp" / "hiragana" / "en" 想定でも良い。
+  const [lang, setLang] = useState("jp");
+
+  // イベント情報（発表会など）は既存コードで扱っている想定だが、
+  // ここでは省略してもよい。必要なら後で戻せるようにメモしておく。
+
+  // 履歴データのローカルコピー
+  const [records, setRecords] = useState([]);
+
+  // ステータスメッセージ
+  const [statusMsg, setStatusMsg] = useState("");
+
+  // ファイル入力のref（CSVインポート用）
+  const fileInputRef = useRef(null);
+
+  // 初期ロード
+  useEffect(() => {
+    try {
+      // 親コード
+      const savedCode = window.localStorage.getItem("pocopoco_parentCode");
+      if (savedCode) {
+        setParentCode(savedCode);
+      }
+
+      // 言語
+      const savedLang = window.localStorage.getItem("pocopoco_lang");
+      if (
+        savedLang === "hiragana" ||
+        savedLang === "jp" ||
+        savedLang === "en"
+      ) {
+        setLang(savedLang);
+      }
+
+      // 履歴
+      const rawHistory = window.localStorage.getItem("pocopoco_history");
+      if (rawHistory) {
+        const parsed = JSON.parse(rawHistory);
+        if (Array.isArray(parsed)) {
+          setRecords(parsed);
+        }
+      }
+    } catch (e) {
+      console.error("settings load error", e);
+    }
+  }, []);
+
+  // 親コード保存
+  function handleSaveParentCode() {
+    if (!/^[0-9]{4}$/.test(parentCode)) {
+      setStatusMsg("4けたの数字で入力してください。");
+      return;
+    }
+    window.localStorage.setItem("pocopoco_parentCode", parentCode);
+    setStatusMsg("ひみつコードを保存しました。");
+  }
+
+  // 言語保存
+  function handleSaveLang() {
+    window.localStorage.setItem("pocopoco_lang", lang);
+    setStatusMsg("ひょうじげんごを保存しました。");
+  }
+
+  // CSVのダウンロード
+  function handleExportCSV() {
+    try {
+      exportToCSV(records);
+      setStatusMsg("CSVをダウンロードしました。");
+    } catch (e) {
+      console.error("export error", e);
+      setStatusMsg("エクスポートでエラーが発生しました。");
+    }
+  }
+
+  // CSVの読み込み開始（inputを開く）
+  function handleImportClick() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""; // 前回の選択をリセット
+      fileInputRef.current.click();
+    }
+  }
+
+  // CSVファイル読み込み処理
+  function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      try {
+        const text = loadEvent.target.result;
+        const importedRecords = parseCSV(text);
+
+        // 既存recordsとマージ
+        const merged = mergeHistory(records, importedRecords);
+
+        // localStorageにも保存
+        window.localStorage.setItem(
+          "pocopoco_history",
+          JSON.stringify(merged)
+        );
+
+        // stateも更新
+        setRecords(merged);
+
+        setStatusMsg(
+          `CSVから${importedRecords.length}件インポートしました。`
+        );
+      } catch (err) {
+        console.error("import error", err);
+        setStatusMsg("CSVの読み込みに失敗しました。形式を確認してください。");
+      }
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      <h1
+        style={{
+          fontSize: "20px",
+          fontWeight: "600",
+          marginBottom: "8px",
+        }}
+      >
+        設定
+      </h1>
+
+      <p
+        style={{
+          fontSize: "12px",
+          lineHeight: 1.4,
+          color: "#666",
+          marginBottom: "16px",
+        }}
+      >
+        おうちのひと が つかう せっていです。
+        こどもは さわらないでね。
+      </p>
+
+      {/* 表示言語の設定 */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "12px",
+          padding: "16px",
+          marginBottom: "24px",
+          backgroundColor: "#fff",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "15px",
+            fontWeight: "600",
+            marginBottom: "8px",
+          }}
+        >
+          ひょうじげんご / Language
+        </div>
+
+        <div
+          style={{
+            fontSize: "12px",
+            color: "#888",
+            lineHeight: 1.4,
+            marginBottom: "8px",
+          }}
+        >
+          こどもには ひらがな、
+          おとなには ふつうの にほんご、
+          きょうし・先生には えいご、など
+          えらべます。
+        </div>
+
+        <select
+          value={lang}
+          onChange={(e) => setLang(e.target.value)}
+          style={{
+            width: "100%",
+            border: "1px solid #bbb",
+            borderRadius: "8px",
+            fontSize: "14px",
+            padding: "10px 12px",
+            marginBottom: "12px",
+            backgroundColor: "#fff",
+          }}
+        >
+          <option value="hiragana">にほんご（ひらがな）</option>
+          <option value="jp">にほんご（ふつう）</option>
+          <option value="en">English</option>
+        </select>
+
+        <button
+          onClick={handleSaveLang}
+          style={{
+            width: "100%",
+            backgroundColor: "#4a148c",
+            color: "#fff",
+            border: "none",
+            borderRadius: "10px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "12px",
+            boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+          }}
+        >
+          表示言語を保存
+        </button>
+      </section>
+
+      {/* 親コード設定 */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "12px",
+          padding: "16px",
+          marginBottom: "24px",
+          backgroundColor: "#fff",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "15px",
+            fontWeight: "600",
+            marginBottom: "8px",
+          }}
+        >
+          おとなの ひみつコード（4けた）
+        </div>
+
+        <div
+          style={{
+            fontSize: "12px",
+            color: "#888",
+            lineHeight: 1.4,
+            marginBottom: "8px",
+          }}
+        >
+          このコードを しっているひと だけが
+          「れんしゅうのきろく」を へんしゅう・さくじょ
+          できます。
+        </div>
+
+        <input
+          type="password"
+          value={parentCode}
+          onChange={(e) => setParentCode(e.target.value)}
+          placeholder="1234"
+          style={{
+            width: "100%",
+            border: "1px solid #bbb",
+            borderRadius: "8px",
+            fontSize: "16px",
+            padding: "10px 12px",
+            letterSpacing: "0.3em",
+            marginBottom: "12px",
+          }}
+        />
+
+        <button
+          onClick={handleSaveParentCode}
+          style={{
+            width: "100%",
+            background:
+              "linear-gradient(90deg, rgb(204,0,255), rgb(255,102,153))",
+            color: "#fff",
+            border: "none",
+            borderRadius: "10px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "12px",
+            boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+          }}
+        >
+          ひみつコードを保存
+        </button>
+      </section>
+
+      {/* データのバックアップ / ひっこし */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "12px",
+          padding: "16px",
+          marginBottom: "24px",
+          backgroundColor: "#f9f9ff",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "15px",
+            fontWeight: "600",
+            marginBottom: "8px",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px",
+            alignItems: "center",
+          }}
+        >
+          <span>データのバックアップ / ひっこし</span>
+          <span
+            style={{
+              backgroundColor: "#fff8e1",
+              color: "#a15a00",
+              fontSize: "11px",
+              fontWeight: "600",
+              border: "1px solid #ffe0a1",
+              borderRadius: "6px",
+              padding: "2px 6px",
+              lineHeight: 1.3,
+            }}
+          >
+            おとな専用
+          </span>
+        </div>
+
+        <div
+          style={{
+            fontSize: "12px",
+            color: "#666",
+            lineHeight: 1.4,
+            marginBottom: "12px",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          きろくを ほかの きかい に うつす とき や、
+          まいにち の バックアップようです。
+        </div>
+
+        {/* CSVダウンロード */}
+        <button
+          onClick={handleExportCSV}
+          style={{
+            width: "100%",
+            backgroundColor: "#4a148c",
+            color: "#fff",
+            border: "none",
+            borderRadius: "10px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "12px",
+            marginBottom: "12px",
+            boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+            textAlign: "center",
+          }}
+        >
+          📤 きろくをCSVでダウンロード
+        </button>
+
+        {/* CSVインポート */}
+        <button
+          onClick={handleImportClick}
+          style={{
+            width: "100%",
+            backgroundColor: "#00695c",
+            color: "#fff",
+            border: "none",
+            borderRadius: "10px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "12px",
+            marginBottom: "8px",
+            boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+            textAlign: "center",
+          }}
+        >
+          📥 CSVから よみこむ
+        </button>
+
+        <div
+          style={{
+            fontSize: "11px",
+            color: "#444",
+            lineHeight: 1.4,
+          }}
+        >
+          ※ まえにダウンロードした
+          pocopoco_history_◯◯◯.csv を えらんでください。
+        </div>
+
+        {/* 非表示のinput[type=file] */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          style={{ display: "none" }}
+          onChange={handleFileSelected}
+        />
+      </section>
+
+      {statusMsg && (
+        <div
+          style={{
+            textAlign: "center",
+            fontSize: "13px",
+            lineHeight: 1.4,
+            color: "#4a148c",
+            backgroundColor: "#f5ecff",
+            border: "1px solid #e0ccff",
+            borderRadius: "8px",
+            padding: "8px 12px",
+          }}
+        >
+          {statusMsg}
+        </div>
+      )}
+
+      <div style={{ textAlign: "center", marginTop: "24px" }}>
+        <button
+          onClick={() => {
+            window.location.href = "/";
+          }}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#666",
+            fontSize: "14px",
+            textDecoration: "underline",
+            padding: "8px 12px",
+          }}
+        >
+          ← ホームにもどる
+        </button>
+      </div>
+    </main>
+  );
+}

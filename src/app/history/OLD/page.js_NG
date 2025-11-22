@@ -1,0 +1,1143 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import {
+  LS_HISTORY,
+  LS_CHILDREN,
+  LS_SONGS,
+  LS_TASKS,
+  LS_LANG,
+  LS_ROLE,
+} from "../lib/constants";
+import { t } from "../lib/i18n";
+import { formatDate } from "../lib/formatDate";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+
+export default function HistoryPage() {
+  // -------------------------------
+  // ▼ State
+  // -------------------------------
+  const [records, setRecords] = useState([]);
+  const [children, setChildren] = useState([]);
+  const [songs, setSongs] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [lang, setLang] = useState("ja");
+  const [role, setRole] = useState("parent");
+  const [currentChildId, setCurrentChildId] = useState("all");
+
+  // Task filter
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]);
+  const [isTaskSelectorOpen, setIsTaskSelectorOpen] = useState(false);
+
+  // Period filter
+  const [periodType, setPeriodType] = useState("day");
+
+  // -------------------------------
+  // ▼ Load Data
+  // -------------------------------
+  useEffect(() => {
+    try {
+      const rawHistory = JSON.parse(localStorage.getItem(LS_HISTORY) || "[]");
+      setRecords(rawHistory);
+
+      const rawChildren = JSON.parse(localStorage.getItem(LS_CHILDREN) || "[]");
+      setChildren(rawChildren);
+
+      const rawSongs = JSON.parse(localStorage.getItem(LS_SONGS) || "[]");
+      setSongs(rawSongs);
+
+      const rawTasks = JSON.parse(localStorage.getItem(LS_TASKS) || "[]");
+      setTasks(rawTasks);
+
+      const rawLang = localStorage.getItem(LS_LANG) || "ja";
+      setLang(rawLang);
+
+      const rawRole = localStorage.getItem(LS_ROLE) || "parent";
+      setRole(rawRole);
+
+      // 初回は全タスク選択
+      if (rawTasks?.length > 0) {
+        setSelectedTaskIds(rawTasks.map((t) => t.id));
+      }
+    } catch (e) {
+      console.error("Failed to load LS:", e);
+    }
+  }, []);
+
+  // -------------------------------
+  // ▼ Data Filtering
+  // -------------------------------
+  const filteredRecords = records.filter((rec) => {
+    // 子フィルタ
+    if (currentChildId !== "all") {
+      if (String(rec.childId) !== String(currentChildId)) return false;
+    }
+
+    // タスクフィルタ
+    if (!selectedTaskIds.includes(rec.taskId)) return false;
+
+    // 期間フィルタ
+    const now = new Date();
+    const recDate = new Date(rec.date);
+
+    if (periodType === "day") {
+      return (
+        recDate.getFullYear() === now.getFullYear() &&
+        recDate.getMonth() === now.getMonth() &&
+        recDate.getDate() === now.getDate()
+      );
+    }
+
+    if (periodType === "week") {
+      const weekAgo = new Date();
+      weekAgo.setDate(now.getDate() - 7);
+      return recDate >= weekAgo && recDate <= now;
+    }
+
+    if (periodType === "month") {
+      return (
+        recDate.getFullYear() === now.getFullYear() &&
+        recDate.getMonth() === now.getMonth()
+      );
+    }
+
+    // all
+    return true;
+  });
+
+  // -------------------------------
+  // ▼ Chart Data
+  // -------------------------------
+  const chartDataMap = {};
+
+  filteredRecords.forEach((rec) => {
+    const dateKey = rec.date.slice(0, 10);
+    if (!chartDataMap[dateKey]) {
+      chartDataMap[dateKey] = {
+        date: dateKey,
+        totalMinutes: 0,
+      };
+    }
+    chartDataMap[dateKey].totalMinutes += rec.minutes || 0;
+  });
+
+  const chartData = Object.values(chartDataMap);
+
+  // -------------------------------
+  // ▼ Summary (Today's Summary)
+  // -------------------------------
+  const today = new Date();
+  const summaryFiltered = filteredRecords.filter((rec) => {
+    const d = new Date(rec.date);
+    return (
+      d.getFullYear() === today.getFullYear() &&
+      d.getMonth() === today.getMonth() &&
+      d.getDate() === today.getDate()
+    );
+  });
+
+  const summaryData = {
+    totalMinutes: summaryFiltered.reduce((s, r) => s + (r.minutes || 0), 0),
+    totalCounts: summaryFiltered.length,
+    itemCount: summaryFiltered.length,
+  };
+
+  // -------------------------------
+  // ▼ UI Render
+  // -------------------------------
+  return (
+    <main style={{ padding: "16px" }}>
+      {/* ----------------------------------------------------------
+          Step1：ヘッダー（完全 i18n 対応）
+      ----------------------------------------------------------- */}
+      {role === "child" && (
+        <p style={{ fontSize: "11px", color: "#c06", marginTop: "4px" }}>
+          ※ {t("childModeNotice", lang)}
+        </p>
+      )}
+
+      {/* 子ども切替（親のみ） */}
+      {children.length > 0 && role !== "child" && (
+        <div
+          style={{
+            marginBottom: "10px",
+            display: "flex",
+            gap: "6px",
+            flexWrap: "wrap",
+          }}
+        >
+          {/* 全員 */}
+          <button
+            onClick={() => setCurrentChildId("all")}
+            style={{
+              border:
+                currentChildId === "all"
+                  ? "1px solid #6a1b9a"
+                  : "1px solid #ccc",
+              background: "#fff",
+              borderRadius: "999px",
+              padding: "4px 10px",
+              fontSize: "12px",
+              color: currentChildId === "all" ? "#6a1b9a" : "#555",
+            }}
+          >
+            {t("childAllButton", lang)}
+          </button>
+
+          {/* 個別 */}
+          {children.map((ch) => (
+            <button
+              key={ch.id}
+              onClick={() => setCurrentChildId(ch.id)}
+              style={{
+                border:
+                  currentChildId === ch.id
+                    ? "1px solid #6a1b9a"
+                    : "1px solid #ccc",
+                background: "#fff",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "12px",
+                color: currentChildId === ch.id ? "#6a1b9a" : "#555",
+              }}
+            >
+              {ch.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 子モードで自分だけ */}
+      {children.length > 0 && role === "child" && (
+        <div
+          style={{
+            marginBottom: "10px",
+            display: "flex",
+            gap: "6px",
+            flexWrap: "wrap",
+          }}
+        >
+          {children
+            .filter((c) => String(c.id) === String(currentChildId))
+            .map((ch) => (
+              <span
+                key={ch.id}
+                style={{
+                  border: "1px solid #6a1b9a",
+                  color: "#6a1b9a",
+                  backgroundColor: "#fff",
+                  borderRadius: "999px",
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                }}
+              >
+                {ch.name}
+              </span>
+            ))}
+        </div>
+      )}
+
+      {/* ----------------------------------------------------------
+          Step1：タスク選択・CSV ボタン・期間切替
+      ----------------------------------------------------------- */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#faf5ff",
+          border: "1px solid #e0ccff",
+          padding: "10px 12px",
+          marginBottom: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+        }}
+      >
+        {/* タスクセレクタ */}
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <button
+            onClick={() => setIsTaskSelectorOpen(true)}
+            style={{
+              flex: 1,
+              borderRadius: "999px",
+              border: "1px solid #6a1b9a",
+              padding: "4px 10px",
+              fontSize: "13px",
+              background: "#fff",
+              textAlign: "left",
+            }}
+          >
+            {selectedTaskIds.length === 0 ||
+            selectedTaskIds.length === tasks.length
+              ? t("historyAllTasks", lang)
+              : `${selectedTaskIds.length} ${t(
+                  "historyTasksSelected",
+                  lang
+                )}`}
+          </button>
+
+          {/* CSV */}
+          <div style={{ display: "flex", gap: "4px" }}>
+            <button
+              onClick={handleExportCsv}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #bbb",
+                padding: "4px 8px",
+                fontSize: "11px",
+                background: "#fff",
+              }}
+            >
+              {t("historyCsvExport", lang)}
+            </button>
+
+            <button
+              onClick={handleImportClick}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #bbb",
+                padding: "4px 8px",
+                fontSize: "11px",
+                background: "#fff",
+              }}
+            >
+              {t("historyCsvImport", lang)}
+            </button>
+          </div>
+        </div>
+
+        {/* 期間ボタン */}
+        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+          {[
+            ["day", t("historyDay", lang)],
+            ["week", t("historyWeek", lang)],
+            ["month", t("historyMonth", lang)],
+            ["all", t("historyAllRange", lang)],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setPeriodType(key)}
+              style={{
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "12px",
+                border:
+                  periodType === key
+                    ? "1px solid #6a1b9a"
+                    : "1px solid #ccc",
+                background:
+                  periodType === key
+                    ? "rgba(106,27,154,0.08)"
+                    : "#fff",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* ----------------------------------------------------------
+          Step2：グラフ（完全 i18n）
+      ----------------------------------------------------------- */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#ffffff",
+          border: "1px solid #e0ccff",
+          padding: "12px",
+          marginBottom: "16px",
+        }}
+      >
+        <h2
+          style={{
+            margin: "0 0 8px 0",
+            fontSize: "16px",
+            fontWeight: "600",
+            color: "#6a1b9a",
+          }}
+        >
+          {t("historyGraphTitle", lang)}
+        </h2>
+
+        <p
+          style={{
+            margin: "0 0 12px 0",
+            fontSize: "12px",
+            color: "#666",
+            lineHeight: "1.4",
+          }}
+        >
+          {t("historyChartDescription", lang)}
+        </p>
+
+        {(chartData.length === 0 ||
+          selectedTaskIds.length === 0) && (
+          <div
+            style={{
+              textAlign: "center",
+              padding: "20px 0",
+              color: "#999",
+              fontSize: "13px",
+            }}
+          >
+            {t("historyNoData", lang)}
+          </div>
+        )}
+
+        {chartData.length > 0 &&
+          selectedTaskIds.length > 0 && (
+            <div style={{ width: "100%", height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#eee"
+                  />
+                  <XAxis
+                    dataKey="date"
+                    tickFormatter={(value) =>
+                      formatDate(value, lang)
+                    }
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis
+                    tickFormatter={(v) =>
+                      `${v}${t("historyMinutesUnit", lang)}`
+                    }
+                    width={40}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <Tooltip
+                    formatter={(value) =>
+                      `${value}${t(
+                        "historyMinutesUnit",
+                        lang
+                      )}`
+                    }
+                    labelFormatter={(label) =>
+                      formatDate(label, lang)
+                    }
+                  />
+                  <Bar
+                    dataKey="totalMinutes"
+                    fill="#ba68c8"
+                    radius={[6, 6, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+      </section>
+
+      {/* ----------------------------------------------------------
+          Step3：今日のまとめ（完全 i18n）
+      ----------------------------------------------------------- */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#ffffff",
+          border: "1px solid #e0ccff",
+          padding: "12px",
+          marginBottom: "16px",
+        }}
+      >
+        <h2
+          style={{
+            margin: "0 0 12px 0",
+            fontSize: "16px",
+            fontWeight: "600",
+            color: "#6a1b9a",
+          }}
+        >
+          {t("historyTodaySummary", lang)}
+        </h2>
+
+        {summaryData.itemCount === 0 && (
+          <p
+            style={{
+              fontSize: "12px",
+              color: "#999",
+              margin: 0,
+              padding: "12px 0",
+              textAlign: "center",
+            }}
+          >
+            {t("historyNoData", lang)}
+          </p>
+        )}
+
+        {summaryData.itemCount > 0 && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "8px",
+              flexWrap: "wrap",
+            }}
+          >
+            {/* 合計時間 */}
+            <div
+              style={{
+                flex: 1,
+                minWidth: "90px",
+                background: "#faf5ff",
+                borderRadius: "12px",
+                border: "1px solid #e0ccff",
+                padding: "10px",
+                textAlign: "center",
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#6a1b9a",
+                  margin: 0,
+                  marginBottom: "4px",
+                }}
+              >
+                {t("historyTotalTime", lang)}
+              </p>
+              <p
+                style={{
+                  fontSize: "20px",
+                  margin: 0,
+                  fontWeight: "600",
+                  color: "#333",
+                }}
+              >
+                {summaryData.totalMinutes}
+                <span
+                  style={{
+                    fontSize: "12px",
+                    marginLeft: "2px",
+                  }}
+                >
+                  {t("historyMinutesUnit", lang)}
+                </span>
+              </p>
+            </div>
+
+            {/* 合計回数 */}
+            <div
+              style={{
+                flex: 1,
+                minWidth: "90px",
+                background: "#faf5ff",
+                borderRadius: "12px",
+                border: "1px solid #e0ccff",
+                padding: "10px",
+                textAlign: "center",
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#6a1b9a",
+                  margin: 0,
+                  marginBottom: "4px",
+                }}
+              >
+                {t("historyTotalCounts", lang)}
+              </p>
+              <p
+                style={{
+                  fontSize: "20px",
+                  margin: 0,
+                  fontWeight: "600",
+                  color: "#333",
+                }}
+              >
+                {summaryData.totalCounts}
+                <span
+                  style={{
+                    fontSize: "12px",
+                    marginLeft: "2px",
+                  }}
+                >
+                  {t("historyTimesUnit", lang)}
+                </span>
+              </p>
+            </div>
+
+            {/* 件数 */}
+            <div
+              style={{
+                flex: 1,
+                minWidth: "90px",
+                background: "#faf5ff",
+                borderRadius: "12px",
+                border: "1px solid #e0ccff",
+                padding: "10px",
+                textAlign: "center",
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#6a1b9a",
+                  margin: 0,
+                  marginBottom: "4px",
+                }}
+              >
+                {t("historyItemsCount", lang)}
+              </p>
+              <p
+                style={{
+                  fontSize: "20px",
+                  margin: 0,
+                  fontWeight: "600",
+                  color: "#333",
+                }}
+              >
+                {summaryData.itemCount}
+                <span
+                  style={{
+                    fontSize: "12px",
+                    marginLeft: "2px",
+                  }}
+                >
+                  {t("historyItemUnit", lang)}
+                </span>
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+      </div>   // ★ これが不足している
+      </main>   //  この1行がまだ必要
+);   // ← return の終了
+
+/******************************************************
+ * Part2-1  履歴画面 後半（完全 i18n 対応）
+ * ここから下を page.js に貼り付けてください
+ ******************************************************/
+
+  /* ================================
+   * Step4: 履歴リスト（カード描画部）
+   * ================================ */
+
+  // i18n：曲名の表示（抜けている場合）
+  const getSongName = (songId) => {
+    if (!songId) return t("historyNoSongName");
+    const song = songs.find((s) => s.id === songId);
+    return song ? song.name : t("historyNoSongName");
+  };
+
+  // i18n：タスク名の表示
+  const getTaskName = (taskId) => {
+    if (!taskId) return t("historyNoTaskName");
+    const task = tasks.find((t) => t.id === taskId);
+    return task ? task.name : t("historyNoTaskName");
+  };
+
+  // 練習時間 mm → “X分” の文字列
+  const formatDuration = (min) => {
+    if (language === "hiragana") {
+      return `${min}ふん`;
+    }
+    if (language === "en") {
+      return `${min} min`;
+    }
+    return `${min}分`;
+  };
+
+  // 履歴カード1枚
+  const HistoryCard = ({ item }) => {
+    const {
+      id,
+      taskId,
+      songId,
+      duration,
+      date,
+      memo,
+    } = item;
+
+    return (
+      <div
+        className="w-full bg-white shadow-sm rounded-xl p-4 mb-3 border border-gray-200"
+        key={id}
+      >
+        {/* 上段：日付・曲名 */}
+        <div className="flex justify-between items-center mb-1">
+          <div className="font-semibold text-gray-900 text-base">
+            {formatDateLocalized(date, language)}
+          </div>
+
+          {/* 編集アイコン（親モードのみ） */}
+          {mode === "parent" && (
+            <button
+              className="text-purple-600 hover:text-purple-700"
+              aria-label={t("historyEditAria")}
+              onClick={() => openEdit(item)}
+            >
+              ✏️
+            </button>
+          )}
+        </div>
+
+        {/* 曲名 */}
+        <div className="text-gray-800 text-sm mb-1">
+          {t("historySongLabel")}: {getSongName(songId)}
+        </div>
+
+        {/* タスク名 */}
+        <div className="text-gray-800 text-sm mb-1">
+          {t("historyTaskLabel")}: {getTaskName(taskId)}
+        </div>
+
+        {/* 練習時間 */}
+        <div className="text-gray-900 text-sm mb-1">
+          {t("historyDurationLabel")}: {formatDuration(duration)}
+        </div>
+
+        {/* メモ */}
+        {memo && (
+          <div className="text-gray-700 text-xs whitespace-pre-line mt-2 border-t pt-2">
+            {memo}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+    /* ===========================================
+   * 月別リストの生成（年月ごとにまとめる）
+   * =========================================== */
+
+  const groupHistoryByMonth = (historyArray) => {
+    const groups = {};
+
+    historyArray.forEach((item) => {
+      const d = new Date(item.date);
+      const y = d.getFullYear();
+      const m = d.getMonth() + 1;
+      const key = `${y}-${m.toString().padStart(2, "0")}`;
+
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(item);
+    });
+
+    return groups;
+  };
+
+  const monthGroups = groupHistoryByMonth(filteredHistory);
+
+  /* ===========================================
+   * 月別 → 日別のグループ化
+   * =========================================== */
+
+  const groupByDate = (items) => {
+    const groups = {};
+    items.forEach((item) => {
+      const d = formatDateLocalized(item.date, language);
+      if (!groups[d]) groups[d] = [];
+      groups[d].push(item);
+    });
+    return groups;
+  };
+
+
+  /* ===========================================
+   * タスク絞り込みモーダル（中央ポップアップ）
+   * Step5 完全 i18n 対応
+   * =========================================== */
+
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [tempTaskFilter, setTempTaskFilter] = useState(taskFilter);
+
+  const openTaskSelector = () => {
+    setTempTaskFilter(taskFilter);
+    setShowTaskModal(true);
+  };
+
+  const closeTaskSelector = () => setShowTaskModal(false);
+
+  const toggleTask = (id) => {
+    if (tempTaskFilter.includes(id)) {
+      setTempTaskFilter(tempTaskFilter.filter((t) => t !== id));
+    } else {
+      setTempTaskFilter([...tempTaskFilter, id]);
+    }
+  };
+
+  const selectAllTasks = () => {
+    setTempTaskFilter(tasks.map((t) => t.id));
+  };
+
+  const unselectAllTasks = () => {
+    setTempTaskFilter([]);
+  };
+
+  const applyTaskFilter = () => {
+    setTaskFilter(tempTaskFilter);
+    setShowTaskModal(false);
+  };
+
+    /* ===========================================
+   * タスクセレクタモーダル UI（中央ポップアップ）
+   * 完全 i18n 対応
+   * =========================================== */
+
+  const TaskSelectorModal = () => {
+    if (!showTaskModal) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
+        <div className="bg-white rounded-2xl p-6 w-80 shadow-lg animate-fadeIn">
+          {/* タイトル */}
+          <h2 className="text-lg font-bold text-gray-800 mb-4 text-center">
+            {t("historyTaskSelectorTitle")}
+          </h2>
+
+          {/* タスク一覧 */}
+          <div className="max-h-48 overflow-y-auto mb-4 pr-1">
+            {tasks.map((task) => (
+              <div
+                key={task.id}
+                className="flex items-center mb-2 cursor-pointer"
+                onClick={() => toggleTask(task.id)}
+              >
+                <input
+                  type="checkbox"
+                  checked={tempTaskFilter.includes(task.id)}
+                  readOnly
+                  className="mr-3"
+                />
+                <span className="text-gray-700 text-sm">{task.name}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* 操作ボタン */}
+          <div className="flex justify-between mb-4">
+            <button
+              className="text-purple-600 text-sm"
+              onClick={selectAllTasks}
+            >
+              {t("historySelectAll")}
+            </button>
+
+            <button
+              className="text-purple-600 text-sm"
+              onClick={unselectAllTasks}
+            >
+              {t("historyUnselectAll")}
+            </button>
+          </div>
+
+          {/* OK / Cancel */}
+          <div className="flex justify-end space-x-3">
+            <button
+              className="px-4 py-2 rounded-lg bg-gray-200 text-gray-700 text-sm"
+              onClick={closeTaskSelector}
+            >
+              {t("cancel")}
+            </button>
+
+            <button
+              className="px-4 py-2 rounded-lg bg-purple-600 text-white text-sm"
+              onClick={applyTaskFilter}
+            >
+              {t("historyTaskSelectorOk")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+
+  /* ===========================================
+   * CSV Export（UTF-8 BOM / 文字化け防止）
+   * =========================================== */
+
+  const exportCSV = () => {
+    if (filteredHistory.length === 0) return;
+
+    const header = [
+      "id",
+      "taskId",
+      "songId",
+      "duration",
+      "date",
+      "memo",
+    ];
+
+    const rows = filteredHistory.map((item) => [
+      item.id,
+      item.taskId,
+      item.songId,
+      item.duration,
+      item.date,
+      item.memo ? item.memo.replace(/\n/g, "\\n") : "",
+    ]);
+
+    const csvContent =
+      "\uFEFF" + // UTF-8 BOM
+      [header, ...rows].map((e) => e.join(",")).join("\n");
+
+    const blob = new Blob([csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "history.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+
+  /* ===========================================
+   * CSV Import（項目不一致 → 警告）
+   * =========================================== */
+
+  const importCSV = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      const text = e.target.result;
+
+      const lines = text.split("\n").map((l) => l.trim());
+      const header = lines[0].split(",");
+
+      // 必須列
+      const required = ["id", "taskId", "songId", "duration", "date", "memo"];
+
+      // 項目名が一致しているか？
+      const isValid = required.every((key, index) => header[index] === key);
+
+      if (!isValid) {
+        alert(t("historyCSVHeaderError"));
+        return;
+      }
+
+      const imported = lines.slice(1).map((line) => {
+        const cols = line.split(",");
+
+        return {
+          id: cols[0],
+          taskId: cols[1],
+          songId: cols[2],
+          duration: Number(cols[3] || 0),
+          date: cols[4],
+          memo: cols[5] ? cols[5].replace(/\\n/g, "\n") : "",
+        };
+      });
+
+      // 上書き保存
+      setHistory(imported);
+      localStorage.setItem(LS_HISTORY, JSON.stringify(imported));
+
+      alert(t("historyCSVImported"));
+    };
+
+    reader.readAsText(file, "UTF-8");
+  };
+
+    /* ===========================================
+   * Part2-4 : return 内（月別セクション）
+   * 月タイトル → 日別 → カード描画
+   * 完全 i18n 対応
+   * =========================================== */
+
+  return (
+    <div className="px-4 pb-20">
+
+      {/* タスクセレクタモーダル */}
+      <TaskSelectorModal />
+
+      {/* CSV 入出力ボタン（親モードのみ） */}
+      {mode === "parent" && (
+        <div className="flex justify-end space-x-3 my-4">
+          <button
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm"
+            onClick={exportCSV}
+          >
+            {t("historyExportCSV")}
+          </button>
+
+          <label className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm cursor-pointer">
+            {t("historyImportCSV")}
+            <input
+              type="file"
+              accept=".csv"
+              className="hidden"
+              onChange={importCSV}
+            />
+          </label>
+        </div>
+      )}
+
+      {/* 月別ループ */}
+      {Object.keys(monthGroups).length === 0 && (
+        <div className="text-center text-gray-500 mt-10">
+          {t("historyNoData")}
+        </div>
+      )}
+
+      {Object.keys(monthGroups)
+        .sort((a, b) => (a < b ? 1 : -1))
+        .map((monthKey) => {
+          const monthItems = monthGroups[monthKey] || [];
+
+          // 日別にグループ化
+          const dateGroups = groupByDate(monthItems);
+
+          // 月表示（言語別）
+          const [year, month] = monthKey.split("-");
+          const monthLabel =
+            language === "hiragana"
+              ? `${year}ねん ${month}がつ`
+              : language === "en"
+              ? `${year}.${month}`
+              : `${year}年 ${month}月`;
+
+          return (
+            <div key={monthKey} className="mb-8 mt-6">
+
+              {/* ---- 月タイトル ---- */}
+              <h2 className="text-lg font-bold text-gray-800 mb-3 border-b pb-1">
+                {monthLabel}
+              </h2>
+
+              {/* ---- 日別ループ ---- */}
+              {Object.keys(dateGroups)
+                .sort((a, b) => {
+                  // 日付文字列を Date に変換して降順で並べる
+                  const d1 = new Date(dateGroups[a][0].date);
+                  const d2 = new Date(dateGroups[b][0].date);
+                  return d1 < d2 ? 1 : -1;
+                })
+                .map((dateLabel) => (
+                  <div key={dateLabel} className="mb-4">
+
+                    {/* ---- 日付見出し ---- */}
+                    <h3 className="text-base font-semibold text-gray-700 mb-2">
+                      {dateLabel}
+                    </h3>
+
+                    {/* ---- カードを並べる ---- */}
+                    {dateGroups[dateLabel]
+                      .sort((a, b) => b.duration - a.duration)
+                      .map((item) => (
+                        <HistoryCard key={item.id} item={item} />
+                      ))}
+                  </div>
+                ))}
+            </div>
+          );
+        })}
+    </div>
+  );
+
+    /* ===========================================
+   * その他ユーティリティ（必要に応じて拡張可能）
+   * =========================================== */
+
+  // 編集モードでカードを開く
+  const openEdit = (item) => {
+    setEditingItem(item);
+    setShowEditModal(true);
+  };
+
+  // 編集モーダルを閉じる
+  const closeEditModal = () => {
+    setShowEditModal(false);
+    setEditingItem(null);
+  };
+
+  // 編集内容の保存
+  const saveEdit = (updated) => {
+    const newHistory = history.map((h) =>
+      h.id === updated.id ? updated : h
+    );
+    setHistory(newHistory);
+    localStorage.setItem(LS_HISTORY, JSON.stringify(newHistory));
+    closeEditModal();
+  };
+
+
+  /* ===========================================
+   * 編集モーダル（必要であればここに UI 実装）
+   * ※ UI は既存版と同一デザインのまま残せます
+   * =========================================== */
+
+  const EditModal = () => {
+    if (!showEditModal || !editingItem) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-40 flex justify-center items-center z-50">
+        <div className="bg-white rounded-2xl p-6 w-80 shadow-lg">
+
+          <h2 className="text-lg font-bold text-gray-800 mb-4 text-center">
+            {t("historyEditTitle")}
+          </h2>
+
+          {/* メモ編集 */}
+          <textarea
+            className="w-full border rounded-lg p-2 text-sm h-32"
+            value={editingItem.memo ?? ""}
+            onChange={(e) =>
+              setEditingItem({
+                ...editingItem,
+                memo: e.target.value,
+              })
+            }
+          />
+
+          {/* ボタン */}
+          <div className="flex justify-end space-x-3 mt-4">
+            <button
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm"
+              onClick={closeEditModal}
+            >
+              {t("cancel")}
+            </button>
+
+            <button
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm"
+              onClick={() => saveEdit(editingItem)}
+            >
+              {t("save")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+
+  /* ===========================================
+   * 最終 return に編集モーダルを追加
+   * =========================================== */
+
+  return (
+    <>
+      {/* 既存 return（Part2-4） */}
+      { /* ↓ ここはすでに Part2-4 で実装済みの return */ }
+      { /* Part2-4 の return 全体をそのまま生かしてください */ }
+
+      {/* 編集モーダル */}
+      <EditModal />
+    </>
+  );
+}
+
+/* ===========================================
+ * export default
+ * =========================================== */
+
+export default HistoryPage;

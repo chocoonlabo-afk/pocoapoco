@@ -1,0 +1,401 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export default function HistoryEditPage() {
+  const [entryId, setEntryId] = useState(null);
+
+  // 親コードまわり
+  const [needAuth, setNeedAuth] = useState(true);
+  const [parentCodeInput, setParentCodeInput] = useState("");
+  const [parentCodeSaved, setParentCodeSaved] = useState("");
+
+  // 編集フィールド
+  const [task, setTask] = useState("");
+  const [minutes, setMinutes] = useState(""); // 分
+  const [count, setCount] = useState("");
+  const [memo, setMemo] = useState("");
+  const [startedAtStr, setStartedAtStr] = useState("");
+
+  const [statusMsg, setStatusMsg] = useState("");
+
+  // 1) URL から id を読む
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const idStr = params.get("id");
+    if (idStr !== null) {
+      const idx = parseInt(idStr, 10);
+      if (!isNaN(idx)) {
+        setEntryId(idx);
+      }
+    }
+  }, []);
+
+  // 2) 親コードを読み込み
+  useEffect(() => {
+    try {
+      const savedCode =
+        window.localStorage.getItem("pocopoco_parentCode") || "0000";
+      setParentCodeSaved(savedCode);
+    } catch (e) {
+      console.error("parentCode load error", e);
+      setParentCodeSaved("0000");
+    }
+  }, []);
+
+  // 3) 該当レコードを読み込んでフォームにセット
+  useEffect(() => {
+    if (entryId === null) return;
+    try {
+      const raw = window.localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const all = JSON.parse(raw);
+      const rec = all[entryId];
+      if (!rec) return;
+
+      setTask(rec.task || "");
+      setMinutes(String(Math.floor((rec.seconds || 0) / 60)));
+      setCount(String(rec.count || 0));
+      setMemo(rec.memo || "");
+      setStartedAtStr(rec.startedAt || "");
+    } catch (e) {
+      console.error("history edit load error", e);
+    }
+  }, [entryId]);
+
+  // 親コードチェック
+  function handleAuthSubmit(e) {
+    e.preventDefault();
+    if (parentCodeInput === parentCodeSaved) {
+      setNeedAuth(false);
+      setStatusMsg("");
+    } else {
+      setStatusMsg("ひみつコードがちがいます。");
+    }
+  }
+
+  // 保存処理
+  function handleSave(e) {
+    e.preventDefault();
+    if (entryId === null) return;
+
+    try {
+      const raw = window.localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const all = JSON.parse(raw);
+
+      const newSeconds = parseInt(minutes, 10) * 60 || 0;
+      const newCount = parseInt(count, 10) || 0;
+
+      all[entryId] = {
+        ...all[entryId],
+        task: task,
+        seconds: newSeconds,
+        count: newCount,
+        memo: memo,
+        startedAt: startedAtStr,
+      };
+
+      window.localStorage.setItem("pocopoco_history", JSON.stringify(all));
+
+      // 保存後は履歴画面に戻る
+      window.location.href = "/history";
+    } catch (e) {
+      console.error("save error", e);
+      setStatusMsg("ほぞんで エラーがでました。");
+    }
+  }
+
+  // まだid読み込み中
+  if (entryId === null) {
+    return (
+      <main
+        style={{
+          fontFamily: "system-ui, sans-serif",
+          padding: "24px 16px",
+          maxWidth: "480px",
+          margin: "0 auto",
+          fontSize: "14px",
+        }}
+      >
+        <div style={{ color: "#666" }}>よみこみちゅう…</div>
+      </main>
+    );
+  }
+
+  // 認証フェーズ
+  if (needAuth) {
+    return (
+      <main
+        style={{
+          fontFamily: "system-ui, sans-serif",
+          padding: "24px 16px",
+          maxWidth: "480px",
+          margin: "0 auto",
+        }}
+      >
+        <h1
+          style={{
+            fontSize: "18px",
+            fontWeight: "600",
+            color: "#4a148c",
+            marginBottom: "16px",
+          }}
+        >
+          おとなの ひみつコード
+        </h1>
+
+        <p
+          style={{
+            fontSize: "13px",
+            lineHeight: 1.4,
+            color: "#555",
+            marginBottom: "16px",
+          }}
+        >
+          この きろく を へんしゅうするには、
+          おうちのひとの 4けたコード が ひつようです。
+        </p>
+
+        <form onSubmit={handleAuthSubmit}>
+          <input
+            type="password"
+            value={parentCodeInput}
+            onChange={(e) => setParentCodeInput(e.target.value)}
+            placeholder="1234"
+            style={{
+              width: "100%",
+              border: "1px solid #bbb",
+              borderRadius: "8px",
+              fontSize: "16px",
+              padding: "10px 12px",
+              letterSpacing: "0.3em",
+              marginBottom: "12px",
+            }}
+          />
+
+          <button
+            type="submit"
+            style={{
+              width: "100%",
+              background:
+                "linear-gradient(90deg, rgb(204,0,255), rgb(255,102,153))",
+              color: "#fff",
+              border: "none",
+              borderRadius: "10px",
+              fontSize: "15px",
+              fontWeight: "600",
+              padding: "12px",
+              boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+              marginBottom: "12px",
+            }}
+          >
+            OK
+          </button>
+        </form>
+
+        {statusMsg && (
+          <div
+            style={{
+              textAlign: "center",
+              fontSize: "13px",
+              lineHeight: 1.4,
+              color: "#a00",
+              backgroundColor: "#fff5f5",
+              border: "1px solid #f5cccc",
+              borderRadius: "8px",
+              padding: "8px 12px",
+            }}
+          >
+            {statusMsg}
+          </div>
+        )}
+
+        <div style={{ textAlign: "center", marginTop: "24px" }}>
+          <button
+            onClick={() => {
+              window.location.href = "/history";
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#666",
+              fontSize: "14px",
+              textDecoration: "underline",
+              padding: "8px 12px",
+            }}
+          >
+            ← れんしゅうのきろく にもどる
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  // 編集フォームフェーズ
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+        fontSize: "14px",
+      }}
+    >
+      <h1
+        style={{
+          fontSize: "18px",
+          fontWeight: "600",
+          color: "#4a148c",
+          marginBottom: "16px",
+        }}
+      >
+        きろくを なおす
+      </h1>
+
+      <form onSubmit={handleSave}>
+        <div style={fieldBlockStyle}>
+          <label style={fieldLabelStyle}>タスクめい</label>
+          <input
+            type="text"
+            value={task}
+            onChange={(e) => setTask(e.target.value)}
+            style={textInputStyle}
+          />
+        </div>
+
+        <div style={fieldBlockStyle}>
+          <label style={fieldLabelStyle}>分（ぜんたい）</label>
+          <input
+            type="number"
+            min="0"
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+            style={textInputStyle}
+          />
+        </div>
+
+        <div style={fieldBlockStyle}>
+          <label style={fieldLabelStyle}>かいすう</label>
+          <input
+            type="number"
+            min="0"
+            value={count}
+            onChange={(e) => setCount(e.target.value)}
+            style={textInputStyle}
+          />
+        </div>
+
+        <div style={fieldBlockStyle}>
+          <label style={fieldLabelStyle}>メモ</label>
+          <textarea
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
+            style={{
+              ...textInputStyle,
+              minHeight: "80px",
+              resize: "vertical",
+              lineHeight: 1.4,
+            }}
+          />
+        </div>
+
+        <div style={fieldBlockStyle}>
+          <label style={fieldLabelStyle}>開始した日時（ISO）</label>
+          <input
+            type="text"
+            value={startedAtStr}
+            onChange={(e) => setStartedAtStr(e.target.value)}
+            style={textInputStyle}
+          />
+          <div
+            style={{
+              fontSize: "11px",
+              color: "#777",
+              lineHeight: 1.4,
+              marginTop: "4px",
+            }}
+          >
+            例: 2025-10-29T06:55:00.000Z
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          style={{
+            width: "100%",
+            backgroundColor: "#6a1b9a",
+            color: "#fff",
+            border: "none",
+            borderRadius: "10px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "12px",
+            marginTop: "12px",
+            boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+          }}
+        >
+          ほぞんして もどる
+        </button>
+      </form>
+
+      {statusMsg && (
+        <div
+          style={{
+            textAlign: "center",
+            fontSize: "13px",
+            lineHeight: 1.4,
+            color: "#a00",
+            backgroundColor: "#fff5f5",
+            border: "1px solid #f5cccc",
+            borderRadius: "8px",
+            padding: "8px 12px",
+            marginTop: "16px",
+          }}
+        >
+          {statusMsg}
+        </div>
+      )}
+
+      <div style={{ textAlign: "center", marginTop: "24px" }}>
+        <button
+          onClick={() => {
+            window.location.href = "/history";
+          }}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#666",
+            fontSize: "14px",
+            textDecoration: "underline",
+            padding: "8px 12px",
+          }}
+        >
+          ← れんしゅうのきろく にもどる
+        </button>
+      </div>
+    </main>
+  );
+}
+
+const fieldBlockStyle = {
+  marginBottom: "16px",
+};
+
+const fieldLabelStyle = {
+  display: "block",
+  fontSize: "13px",
+  fontWeight: "600",
+  color: "#333",
+  marginBottom: "4px",
+};
+
+const textInputStyle = {
+  width: "100%",
+  border: "1px solid #bbb",
+  borderRadius: "8px",
+  fontSize: "14px",
+  padding: "8px 10px",
+  backgroundColor: "#fff",
+};

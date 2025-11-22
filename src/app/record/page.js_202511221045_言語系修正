@@ -1,0 +1,749 @@
+// src/app/record/page.js
+"use client";
+
+import { Suspense, useEffect, useState, useRef } from "react";
+import { useSearchParams } from "next/navigation";
+import { getLangFromStorage } from "../lib/i18n";
+import {
+  LS_CHILDREN,
+  LS_CURRENT_CHILD_ID,
+  LS_HISTORY,
+  LS_SONGS,
+} from "../constants";
+
+const SONGS_STORAGE_KEY = LS_SONGS;
+const HISTORY_STORAGE_KEY = LS_HISTORY;
+
+export default function RecordPage() {
+  return (
+    <Suspense fallback={<p>読み込み中…</p>}>
+      <RecordInner />
+    </Suspense>
+  );
+}
+
+function RecordInner() {
+  const searchParams = useSearchParams();
+
+  const taskIdFromQuery = searchParams.get("taskId");
+  const taskFromQueryLegacy = searchParams.get("task") || "";
+  const childIdFromQuery = searchParams.get("childId");
+  const autoStart = searchParams.get("autoStart") === "1";
+
+  const [lang, setLang] = useState("jp");
+  const [isRunning, setIsRunning] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [count, setCount] = useState(0);
+  const [memo, setMemo] = useState("");
+  const [startedAt, setStartedAt] = useState("");
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("");
+
+  // 曲関連
+  const [songsByChild, setSongsByChild] = useState({});
+  const [selectedSongId, setSelectedSongId] = useState(""); // select の value
+
+  const intervalRef = useRef(null);
+
+  // 🔁 最新状態を退避しておく ref（ページ離脱時の自動保存用）
+  const latestStateRef = useRef({});
+
+  const DEFAULT_TASKS = [
+    {
+      id: "task_violin_scale",
+      title: "音階",
+      type: "normal",
+      target_time_min: 5,
+      done_log: [],
+      phrase_id: null,
+    },
+    {
+      id: "task_sevcik",
+      title: "セブシック",
+      type: "normal",
+      target_time_min: 10,
+      done_log: [],
+      phrase_id: null,
+    },
+    {
+      id: "task_zaitsu_12_15",
+      title: "ザイツ 12-15小節",
+      type: "phrase",
+      target_time_min: 7,
+      done_log: [],
+      phrase_id: null,
+    },
+  ];
+
+  // --- 初期ロード ---
+  useEffect(() => {
+    const currentLang = getLangFromStorage();
+    setLang(currentLang);
+
+    // 子ども一覧
+    try {
+      const rawChildren = localStorage.getItem(LS_CHILDREN);
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) {
+          setChildren(arr);
+        }
+      }
+    } catch (e) {
+      console.warn("record: children load error", e);
+    }
+
+    // どの子に紐づけるか
+    if (childIdFromQuery) {
+      setCurrentChildId(childIdFromQuery);
+    } else {
+      const savedChild = localStorage.getItem(LS_CURRENT_CHILD_ID);
+      if (savedChild) setCurrentChildId(savedChild);
+    }
+
+    // タスク決定
+    if (taskIdFromQuery) {
+      const found = DEFAULT_TASKS.find((t) => t.id === taskIdFromQuery);
+      if (found) {
+        setSelectedTask(found);
+      } else {
+        setSelectedTask(DEFAULT_TASKS[0] || null);
+      }
+    } else if (taskFromQueryLegacy) {
+      setSelectedTask({
+        id: "task_custom_" + taskFromQueryLegacy,
+        title: taskFromQueryLegacy,
+        type: "normal",
+        target_time_min: 5,
+        done_log: [],
+        phrase_id: null,
+      });
+    } else {
+      setSelectedTask(
+        DEFAULT_TASKS[0] || {
+          id: "task_default",
+          title: "バイオリン",
+          type: "normal",
+          target_time_min: 5,
+          done_log: [],
+          phrase_id: null,
+        }
+      );
+    }
+
+    // 曲リストの読み込み
+    try {
+      const rawSongs = localStorage.getItem(SONGS_STORAGE_KEY);
+      if (rawSongs) {
+        const parsed = JSON.parse(rawSongs);
+        if (parsed && typeof parsed === "object") {
+          setSongsByChild(parsed);
+        }
+      }
+    } catch (e) {
+      console.warn("record: songs load error", e);
+    }
+  }, [taskIdFromQuery, taskFromQueryLegacy, childIdFromQuery]);
+
+  // ホームから来たときに自動で練習開始
+  useEffect(() => {
+    if (autoStart && selectedTask && !isRunning && !isFinished && !startedAt) {
+      handleStart();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, selectedTask]);
+
+  // タイマー
+  useEffect(() => {
+    if (isRunning) {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+      intervalRef.current = setInterval(() => {
+        setElapsedSec((prev) => prev + 1);
+      }, 1000);
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [isRunning]);
+
+  // 表示用：子どもの名前
+  function getCurrentChildName() {
+    if (!currentChildId) return "";
+    const found = children.find((c) => c.id === currentChildId);
+    return found ? found.name : "";
+  }
+
+  // childId 決定ロジック（ページ離脱用にも使う）
+  function getChildIdToSaveFromValues(childIdFromQueryParam, currentChildIdValue) {
+    return (
+      childIdFromQueryParam ||
+      currentChildIdValue ||
+      localStorage.getItem(LS_CURRENT_CHILD_ID) ||
+      ""
+    );
+  }
+
+  // 通常の保存時に使う childId
+  function getChildIdToSave() {
+    return getChildIdToSaveFromValues(childIdFromQuery, currentChildId);
+  }
+
+  // 今日、その子の記録件数
+  function getTodayCountForChild(targetChildId) {
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (!raw) return 0;
+      const data = JSON.parse(raw);
+      const todayIso = new Date().toISOString().slice(0, 10);
+      return data.filter((r) => {
+        if (!r.startedAt?.startsWith(todayIso)) return false;
+        if (!targetChildId) return true;
+        return (r.child_id || "") === targetChildId;
+      }).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  // 現在の子に紐づく曲リスト
+  const currentSongs = (() => {
+    if (!currentChildId) return [];
+    const list = songsByChild[currentChildId];
+    if (!Array.isArray(list)) return [];
+    return list;
+  })();
+
+  // 曲オブジェクト → 一意キー（id がなければ title / songName で代用）
+  const getSongKey = (song, index) =>
+    String(
+      song.id ??
+        song.songId ??
+        song.song_id ??
+        song.title ??
+        song.songTitle ??
+        song.songName ??
+        index
+    );
+
+  // 選択中の曲オブジェクト
+  const selectedSong =
+    currentSongs.find((s, idx) => getSongKey(s, idx) === selectedSongId) ||
+    null;
+
+  function handleStart() {
+    if (!selectedTask) return;
+    if (isRunning || isFinished) return;
+
+    const todayCount = getTodayCountForChild(getChildIdToSave());
+    if (todayCount >= 20) {
+      alert("きょうはこのこのきろくが 20件になりました。あしたまたね！");
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+
+    setIsRunning(true);
+    setElapsedSec(0);
+    setCount(0);
+    setIsFinished(false);
+    setMemo("");
+    setStartedAt(nowIso);
+  }
+
+  function handleIncrementCount() {
+    if (isRunning) setCount((c) => c + 1);
+  }
+
+  // 曲情報を record 用に取り出すユーティリティ
+  function extractSongInfo(song) {
+    if (!song) {
+      return { songTitle: null, songId: null };
+    }
+    const songTitle =
+      song.title || song.songTitle || song.songName || null;
+    const songId =
+      song.id || song.songId || song.song_id || null;
+    return { songTitle, songId };
+  }
+
+  // 練習おわり：タイマー停止＋その時点で一旦保存（append）
+  function handleStop() {
+    if (!isRunning || !selectedTask) return;
+    clearInterval(intervalRef.current);
+    intervalRef.current = null;
+    setIsRunning(false);
+    setIsFinished(true);
+
+    const childIdToSave = getChildIdToSave();
+    const { songTitle, songId } = extractSongInfo(selectedSong);
+
+    const record = {
+      task_id: selectedTask.id,
+      task_title: selectedTask.title,
+      seconds: elapsedSec,
+      count,
+      memo,
+      startedAt: startedAt || new Date().toISOString(),
+      child_id: childIdToSave,
+      song_id: songId,
+      song_title: songTitle,
+    };
+
+    if (!startedAt) setStartedAt(record.startedAt);
+
+    saveSessionToLocalHistory(record, "append");
+  }
+
+  // このきろくをほぞん：同じレコードを上書き（update）
+  function handleSave() {
+    if (!isFinished || !selectedTask) return;
+
+    const childIdToSave = getChildIdToSave();
+    const { songTitle, songId } = extractSongInfo(selectedSong);
+
+    const record = {
+      task_id: selectedTask.id,
+      task_title: selectedTask.title,
+      seconds: elapsedSec,
+      count,
+      memo,
+      startedAt,
+      child_id: childIdToSave,
+      song_id: songId,
+      song_title: songTitle,
+    };
+
+    saveSessionToLocalHistory(record, "update");
+
+    alert("きろくしました。おつかれさま！");
+    window.location.href = "/";
+  }
+
+  // 🔁 最新の状態を ref に保持（ページ離脱時の自動保存用）
+  useEffect(() => {
+    latestStateRef.current = {
+      isRunning,
+      isFinished,
+      elapsedSec,
+      count,
+      memo,
+      startedAt,
+      selectedTask,
+      selectedSong,
+      currentChildId,
+      childIdFromQuery,
+    };
+  }, [
+    isRunning,
+    isFinished,
+    elapsedSec,
+    count,
+    memo,
+    startedAt,
+    selectedTask,
+    selectedSong,
+    currentChildId,
+    childIdFromQuery,
+  ]);
+
+  // ページ離脱時の自動保存
+  useEffect(() => {
+    return () => {
+      const s = latestStateRef.current;
+      if (!s || !s.selectedTask) return;
+
+      const childIdToSave = getChildIdToSaveFromValues(
+        s.childIdFromQuery,
+        s.currentChildId
+      );
+      const { songTitle, songId } = extractSongInfo(s.selectedSong);
+
+      // ▶ ケース1：まだ「練習おわり」を押していない（isRunning中）
+      if (s.isRunning) {
+        const record = {
+          task_id: s.selectedTask.id,
+          task_title: s.selectedTask.title,
+          seconds: s.elapsedSec,
+          count: s.count,
+          memo: s.memo,
+          startedAt: s.startedAt || new Date().toISOString(),
+          child_id: childIdToSave,
+          song_id: songId,
+          song_title: songTitle,
+        };
+        saveSessionToLocalHistory(record, "append");
+        return;
+      }
+
+      // ▶ ケース2：「練習おわり」後だが、まだ「このきろくをほぞん」していない
+      if (s.isFinished && s.startedAt) {
+        const record = {
+          task_id: s.selectedTask.id,
+          task_title: s.selectedTask.title,
+          seconds: s.elapsedSec,
+          count: s.count,
+          memo: s.memo,
+          startedAt: s.startedAt,
+          child_id: childIdToSave,
+          song_id: songId,
+          song_title: songTitle,
+        };
+        saveSessionToLocalHistory(record, "update");
+      }
+    };
+  }, []);
+
+  // unmount時のタイマー停止（保険）
+  useEffect(() => {
+    return () => clearInterval(intervalRef.current);
+  }, []);
+
+  // mode: 'append' | 'update'
+  function saveSessionToLocalHistory(newRecord, mode = "append") {
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      let arr = [];
+      if (raw) {
+        arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) arr = [];
+      }
+
+      if (mode === "append") {
+        arr.push(newRecord);
+      } else if (mode === "update") {
+        const idx = arr.findIndex(
+          (r) =>
+            (r.startedAt || "") === (newRecord.startedAt || "") &&
+            (r.child_id || "") === (newRecord.child_id || "") &&
+            (r.task_id || "") === (newRecord.task_id || "")
+        );
+        if (idx >= 0) {
+          arr[idx] = { ...arr[idx], ...newRecord };
+        } else {
+          arr.push(newRecord);
+        }
+      }
+
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(arr));
+    } catch (e) {
+      console.error("failed to save history", e);
+    }
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSec / 60);
+  const elapsedSecondsOnly = elapsedSec % 60;
+  const taskTitle = selectedTask ? selectedTask.title : "れんしゅう";
+  const childName = getCurrentChildName();
+  const todayLabel = new Date().toLocaleDateString("ja-JP", {
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  });
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      <header style={{ marginBottom: "12px" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: "8px",
+            marginBottom: "4px",
+          }}
+        >
+          <div style={{ fontSize: "14px", color: "#333" }}>{taskTitle}</div>
+          <div style={{ fontSize: "13px", color: "#999" }}>{todayLabel}</div>
+        </div>
+        <div
+          style={{
+            fontSize: "11px",
+            color: "#6a1b9a",
+            marginTop: "4px",
+          }}
+        >
+          {childName
+            ? `このきろくは：${childName} に保存します`
+            : currentChildId
+            ? `このきろくは：${currentChildId} に保存します`
+            : "このきろくは：こども未選択で保存します"}
+        </div>
+      </header>
+
+      {/* 曲選択エリア */}
+      <section
+        style={{
+          borderRadius: "12px",
+          backgroundColor: "#fff",
+          padding: "10px 12px",
+          border: "1px solid #eee",
+          marginBottom: "12px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <label
+            style={{
+              fontSize: "12px",
+              fontWeight: 600,
+              color: "#555",
+            }}
+          >
+            曲
+          </label>
+          <select
+            value={selectedSongId}
+            onChange={(e) => setSelectedSongId(e.target.value)}
+            style={{
+              flex: "1 1 0",
+              minWidth: "160px",
+              borderRadius: "999px",
+              border: "1px solid #ddd",
+              padding: "6px 12px",
+              fontSize: "13px",
+              backgroundColor: "#fff",
+            }}
+          >
+            <option value="">（曲を選ばない）</option>
+            {currentSongs.map((song, index) => {
+              const title =
+                song.title ||
+                song.songTitle ||
+                song.songName ||
+                "(タイトル未設定)";
+              const key = getSongKey(song, index);
+              return (
+                <option key={key} value={key}>
+                  {title}
+                </option>
+              );
+            })}
+          </select>
+
+          <button
+            type="button"
+            onClick={() => {
+              const childId = getChildIdToSave() || currentChildId || "";
+              const q = childId
+                ? `?childId=${encodeURIComponent(childId)}`
+                : "";
+              window.location.href = `/songs${q}`;
+            }}
+            style={{
+              borderRadius: "999px",
+              border: "1px solid #c4b5fd",
+              padding: "6px 10px",
+              fontSize: "11px",
+              backgroundColor: "#f5f3ff",
+              color: "#5b21b6",
+              whiteSpace: "nowrap",
+            }}
+          >
+            曲リストをひらく
+          </button>
+        </div>
+      </section>
+
+      {/* タイマー */}
+      <section
+        style={{
+          border: "1px solid #e0ccff",
+          background:
+            "linear-gradient(135deg, rgba(255,240,255,0.9), rgba(245,230,255,0.8))",
+          borderRadius: "12px",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+          padding: "16px",
+          marginBottom: "16px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            marginBottom: "12px",
+            flexWrap: "wrap",
+            rowGap: "12px",
+          }}
+        >
+          <div style={{ flex: "1 1 45%" }}>
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#6a1b9a",
+                marginBottom: "4px",
+              }}
+            >
+              時間
+            </div>
+            <div
+              style={{
+                fontSize: "24px",
+                fontWeight: "700",
+                color: "#6a1b9a",
+              }}
+            >
+              {elapsedMinutes}:{String(elapsedSecondsOnly).padStart(2, "0")}
+            </div>
+          </div>
+
+          <div style={{ flex: "1 1 45%", textAlign: "right" }}>
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#6a1b9a",
+                marginBottom: "4px",
+              }}
+            >
+              回数
+            </div>
+            <div
+              style={{
+                fontSize: "24px",
+                fontWeight: "700",
+                color: "#6a1b9a",
+              }}
+            >
+              {count}
+            </div>
+            <button
+              onClick={handleIncrementCount}
+              disabled={!isRunning}
+              style={{
+                marginTop: "6px",
+                backgroundColor: isRunning ? "#6a1b9a" : "#bbb",
+                color: "#fff",
+                border: "none",
+                borderRadius: "8px",
+                fontSize: "13px",
+                padding: "6px 10px",
+              }}
+            >
+              +1 かぞえる
+            </button>
+          </div>
+        </div>
+
+        {/* ボタン類 */}
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+          {!isRunning && !isFinished && (
+            <button
+              onClick={handleStart}
+              style={{
+                flex: "1",
+                background:
+                  "linear-gradient(90deg, rgb(204,0,255), rgb(255,102,153))",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "600",
+                padding: "12px",
+              }}
+            >
+              練習開始 ▶
+            </button>
+          )}
+
+          {isRunning && (
+            <button
+              onClick={handleStop}
+              style={{
+                flex: "1",
+                backgroundColor: "#ff5757",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "600",
+                padding: "12px",
+              }}
+            >
+              練習おわり ✋
+            </button>
+          )}
+
+          {isFinished && (
+            <button
+              onClick={handleSave}
+              style={{
+                flex: "1",
+                backgroundColor: "#6a1b9a",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "600",
+                padding: "12px",
+              }}
+            >
+              このきろくをほぞん 💾
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* メモ */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "12px",
+          backgroundColor: "#fff",
+          padding: "16px",
+        }}
+      >
+        <label
+          style={{
+            display: "block",
+            fontSize: "14px",
+            fontWeight: "600",
+            marginBottom: "8px",
+          }}
+        >
+          メモ
+        </label>
+        <textarea
+          rows={3}
+          value={memo}
+          onChange={(e) => setMemo(e.target.value)}
+          placeholder="なにを がんばった？"
+          style={{
+            width: "100%",
+            border: "1px solid #bbb",
+            borderRadius: "8px",
+            fontSize: "14px",
+            padding: "10px 12px",
+            lineHeight: 1.4,
+            resize: "vertical",
+            boxSizing: "border-box", // ★ 右側が飛び出ないように
+          }}
+        />
+      </section>
+    </main>
+  );
+}

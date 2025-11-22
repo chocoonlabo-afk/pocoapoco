@@ -1,0 +1,1033 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+
+/* ===== 共通ユーティリティ/初期値 ===== */
+
+const DEFAULT_TASKS = [
+  { id: "task_violin", label: "バイオリン", icon: "🎻" },
+  { id: "task_piano", label: "ピアノ", icon: "🎹" },
+  { id: "task_solfege", label: "ソルフェージュ", icon: "📝" },
+  { id: "task_japanese", label: "国語", icon: "📖" },
+  { id: "task_math", label: "算数", icon: "🔢" },
+  { id: "task_english", label: "英語", icon: "🇬🇧" },
+  { id: "task_science", label: "理科", icon: "🔬" },
+  { id: "task_social", label: "社会", icon: "🌍" },
+];
+
+function normalizeTasksForSettings(tasksLike) {
+  if (!Array.isArray(tasksLike)) return [];
+  return tasksLike.map((t, index) => {
+    if (t.id) return t;
+    const base =
+      typeof t.label === "string" && t.label.length > 0
+        ? t.label
+        : `task_${index}`;
+    const normalizedId =
+      "task_" +
+      base
+        .toString()
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^\w_ぁ-んァ-ン一-龥]/g, "") +
+      "_" +
+      index;
+    return {
+      id: normalizedId,
+      label: t.label ?? `タスク${index + 1}`,
+      icon: t.icon ?? "🎵",
+    };
+  });
+}
+
+function exportToCSV(records) {
+  if (!records || records.length === 0) {
+    alert("きろくがありません。");
+    return;
+  }
+  const header = ["date", "task", "minutes", "count", "memo"];
+  const rows = records.map((r) => {
+    const dateStr = r.startedAt
+      ? new Date(r.startedAt).toLocaleString("ja-JP")
+      : "";
+    const minutes = Math.floor((r.seconds || 0) / 60);
+    const count = r.count || 0;
+    const memo = r.memo || "";
+    const task = r.task || r.task_title || "";
+    return [
+      `"${dateStr}"`,
+      `"${task.replace(/"/g, '""')}"`,
+      `"${minutes}"`,
+      `"${count}"`,
+      `"${memo.replace(/"/g, '""')}"`,
+    ].join(",");
+  });
+  const csv = [header.join(","), ...rows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const today = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `pocopoco_history_${today}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function parseCSV(csvText) {
+  const lines = csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length < 2) throw new Error("CSVがみじかすぎます。");
+
+  const header = lines[0].split(",").map((h) => h.replace(/^"|"$/g, ""));
+  if (
+    header[0] !== "date" ||
+    header[1] !== "task" ||
+    header[2] !== "minutes" ||
+    header[3] !== "count" ||
+    header[4] !== "memo"
+  ) {
+    throw new Error("CSVのヘッダーがちがいます。");
+  }
+
+  const records = [];
+  for (let i = 1; i < lines.length; i++) {
+    const rawCells = lines[i].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    const cells = rawCells.map((c) => c.replace(/^"|"$/g, ""));
+    const [dateStr, task, minutesStr, countStr, memo] = cells;
+    const startedDate = new Date(dateStr);
+    if (isNaN(startedDate.getTime())) continue;
+    const seconds = parseInt(minutesStr, 10) * 60 || 0;
+    const count = parseInt(countStr, 10) || 0;
+    records.push({
+      task,
+      seconds,
+      count,
+      memo,
+      startedAt: startedDate.toISOString(),
+    });
+  }
+  return records;
+}
+
+function mergeHistory(oldArr, newArr) {
+  const result = [...oldArr];
+  for (const rec of newArr) {
+    const exists = result.some(
+      (r) =>
+        r.startedAt === rec.startedAt &&
+        (r.task || r.task_title) === (rec.task || rec.task_title) &&
+        (r.seconds || 0) === (rec.seconds || 0) &&
+        (r.count || 0) === (rec.count || 0)
+    );
+    if (!exists) result.push(rec);
+  }
+  return result;
+}
+
+/* ===== ページ本体 ===== */
+export default function SettingsPage() {
+  const [role, setRole] = useState("parent");
+
+  const [lang, setLang] = useState("jp");
+  const [parentCode, setParentCode] = useState("");
+  const [eventTitle, setEventTitle] = useState("");
+  const [eventDate, setEventDate] = useState("");
+  const [birthday, setBirthday] = useState("");
+  const [records, setRecords] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [newTaskLabel, setNewTaskLabel] = useState("");
+  const [newTaskIcon, setNewTaskIcon] = useState("");
+  const [statusMsg, setStatusMsg] = useState("");
+  const fileInputRef = useRef(null);
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [newCalEventTitle, setNewCalEventTitle] = useState("");
+  const [newCalEventDate, setNewCalEventDate] = useState("");
+  const [newCalEventMark, setNewCalEventMark] = useState("");
+  const [calendarTaskFilter, setCalendarTaskFilter] = useState(null);
+
+  // 子ども管理
+  const [children, setChildren] = useState([]);
+  const [newChildName, setNewChildName] = useState("");
+  const [newChildBirthday, setNewChildBirthday] = useState("");
+  const [currentChildId, setCurrentChildId] = useState("");
+
+  useEffect(() => {
+    try {
+      const savedRole = localStorage.getItem("pocopoco_role");
+      if (savedRole === "parent" || savedRole === "child") {
+        setRole(savedRole);
+      }
+
+      const savedLang = localStorage.getItem("pocopoco_lang");
+      if (savedLang) setLang(savedLang);
+
+      const savedCode = localStorage.getItem("pocopoco_parentCode");
+      if (savedCode) setParentCode(savedCode);
+
+      const rawEvent = localStorage.getItem("pocopoco_event");
+      if (rawEvent) {
+        const evt = JSON.parse(rawEvent);
+        setEventTitle(evt.title || "");
+        setEventDate(evt.date || "");
+      }
+
+      const savedBirthday = localStorage.getItem("pocopoco_birthday");
+      if (savedBirthday) setBirthday(savedBirthday);
+
+      const rawHistory = localStorage.getItem("pocopoco_history");
+      if (rawHistory) {
+        const parsed = JSON.parse(rawHistory);
+        if (Array.isArray(parsed)) setRecords(parsed);
+      }
+
+      const rawTasks = localStorage.getItem("pocopoco_tasks");
+      if (rawTasks) {
+        const parsedTasks = JSON.parse(rawTasks);
+        const normalized = normalizeTasksForSettings(parsedTasks);
+        setTasks(normalized);
+        localStorage.setItem("pocopoco_tasks", JSON.stringify(normalized));
+      } else {
+        setTasks(DEFAULT_TASKS);
+        localStorage.setItem("pocopoco_tasks", JSON.stringify(DEFAULT_TASKS));
+      }
+
+      const rawCalEvents = localStorage.getItem("pocopoco_events");
+      if (rawCalEvents) {
+        const arr = JSON.parse(rawCalEvents);
+        if (Array.isArray(arr)) setCalendarEvents(arr);
+      }
+
+      const rawCalTaskFilter = localStorage.getItem(
+        "pocopoco_calendar_task_filter"
+      );
+      if (rawCalTaskFilter) {
+        const arr = JSON.parse(rawCalTaskFilter);
+        if (Array.isArray(arr)) setCalendarTaskFilter(arr);
+      }
+
+      const rawChildren = localStorage.getItem("pocopoco_children");
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) setChildren(arr);
+      }
+      const savedCurrentChild = localStorage.getItem("pocopoco_current_child_id");
+      if (savedCurrentChild) setCurrentChildId(savedCurrentChild);
+    } catch (e) {
+      console.error("settings load error", e);
+    }
+  }, []);
+
+  /* ===== ロール切替 ===== */
+  function switchToParent() {
+    const savedCode = localStorage.getItem("pocopoco_parentCode") || "";
+    if (!savedCode) {
+      localStorage.setItem("pocopoco_role", "parent");
+      setRole("parent");
+      setStatusMsg("親モードになりました");
+      return;
+    }
+    const input = window.prompt("おとなの4けたコードを入力してください");
+    if (input === savedCode) {
+      localStorage.setItem("pocopoco_role", "parent");
+      localStorage.setItem("pocopoco_parentAuthed", "yes");
+      setRole("parent");
+      setStatusMsg("親モードになりました");
+    } else if (input !== null) {
+      alert("コードがちがいます");
+    }
+  }
+
+  function switchToChild() {
+    localStorage.setItem("pocopoco_role", "child");
+    setRole("child");
+    setStatusMsg("子モードになりました");
+  }
+
+  /* ===== 子ども管理 ===== */
+  function handleAddChild() {
+    const name = newChildName.trim();
+    if (!name) {
+      setStatusMsg("なまえを入力してください");
+      return;
+    }
+    if (children.length >= 5) {
+      setStatusMsg("こどもは5人まで登録できます");
+      return;
+    }
+    const id = "child_" + Date.now().toString(36);
+    const newC = { id, name, birthday: newChildBirthday || "" };
+    const next = [...children, newC];
+    setChildren(next);
+    localStorage.setItem("pocopoco_children", JSON.stringify(next));
+    setNewChildName("");
+    setNewChildBirthday("");
+    setStatusMsg(`${name} を登録しました`);
+  }
+
+  function handleDeleteChild(id) {
+    if (!window.confirm("このこどもを削除しますか？")) return;
+    const next = children.filter((c) => c.id !== id);
+    setChildren(next);
+    localStorage.setItem("pocopoco_children", JSON.stringify(next));
+    if (currentChildId === id) {
+      localStorage.removeItem("pocopoco_current_child_id");
+      setCurrentChildId("");
+    }
+    setStatusMsg("削除しました");
+  }
+
+  function handleSetCurrentChild(id) {
+    setCurrentChildId(id);
+    localStorage.setItem("pocopoco_current_child_id", id);
+    const found = children.find((c) => c.id === id);
+    setStatusMsg(`${found?.name || "この子"} を表示対象にしました`);
+  }
+
+  /* ===== 共通保存系 ===== */
+
+  function handleSaveLang() {
+    localStorage.setItem("pocopoco_lang", lang);
+    setStatusMsg("ひょうじげんごを保存しました。");
+  }
+
+  function handleSaveParentCode() {
+    if (!/^[0-9]{4}$/.test(parentCode)) {
+      setStatusMsg("4けたの数字で入力してください。");
+      return;
+    }
+    localStorage.setItem("pocopoco_parentCode", parentCode);
+    setStatusMsg("ひみつコードを保存しました。");
+  }
+
+  function handleSaveEvent() {
+    const data = { title: eventTitle, date: eventDate };
+    localStorage.setItem("pocopoco_event", JSON.stringify(data));
+    setStatusMsg("イベントを保存しました。");
+  }
+
+  function handleSaveBirthday() {
+    localStorage.setItem("pocopoco_birthday", birthday);
+    setStatusMsg("おたんじょうびを保存しました。");
+  }
+
+  function persistTasks(nextTasks) {
+    setTasks(nextTasks);
+    localStorage.setItem("pocopoco_tasks", JSON.stringify(nextTasks));
+  }
+
+  function handleAddTask() {
+    const label = newTaskLabel.trim();
+    const icon = newTaskIcon.trim();
+    if (!label || !icon) {
+      setStatusMsg("アイコンとタスクめいをいれてください");
+      return;
+    }
+    const safeId =
+      "task_" +
+      label
+        .toString()
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^\w_ぁ-んァ-ン一-龥]/g, "") +
+      "_" +
+      Date.now().toString().slice(-5);
+    const next = [...tasks, { id: safeId, label, icon }];
+    persistTasks(next);
+    setNewTaskLabel("");
+    setNewTaskIcon("");
+    setStatusMsg(`「${label}」を追加しました`);
+  }
+
+  function handleDeleteTask(idx) {
+    if (!window.confirm("このタスクを消しますか？")) return;
+    const next = tasks.filter((_, i) => i !== idx);
+    persistTasks(next);
+    setStatusMsg("タスクを削除しました");
+  }
+
+  function handleExportCSV() {
+    exportToCSV(records);
+    setStatusMsg("CSVを書き出しました");
+  }
+
+  function handleImportClick() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  }
+
+  function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const imported = parseCSV(ev.target.result);
+        const merged = mergeHistory(records, imported);
+        localStorage.setItem("pocopoco_history", JSON.stringify(merged));
+        setRecords(merged);
+        setStatusMsg(`CSVから${imported.length}件インポートしました`);
+      } catch (err) {
+        console.error(err);
+        setStatusMsg("CSVの読み込みに失敗しました");
+      }
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  function handleAddCalendarEvent() {
+    if (!newCalEventDate) {
+      setStatusMsg("日付を入れてください");
+      return;
+    }
+    const ev = {
+      id: "ev_" + Date.now().toString(36),
+      title: newCalEventTitle || "イベント",
+      date: newCalEventDate,
+      mark: newCalEventMark || "EV",
+    };
+    const next = [...calendarEvents, ev];
+    setCalendarEvents(next);
+    localStorage.setItem("pocopoco_events", JSON.stringify(next));
+    setNewCalEventTitle("");
+    setNewCalEventDate("");
+    setNewCalEventMark("");
+    setStatusMsg("カレンダーイベントを追加しました");
+  }
+
+  function handleDeleteCalendarEvent(id) {
+    const next = calendarEvents.filter((ev) => ev.id !== id);
+    setCalendarEvents(next);
+    localStorage.setItem("pocopoco_events", JSON.stringify(next));
+    setStatusMsg("イベントを削除しました");
+  }
+
+  function handleToggleCalendarTask(id) {
+    if (!calendarTaskFilter) {
+      const next = [id];
+      setCalendarTaskFilter(next);
+      localStorage.setItem(
+        "pocopoco_calendar_task_filter",
+        JSON.stringify(next)
+      );
+      setStatusMsg("カレンダーのタスクを設定しました");
+      return;
+    }
+    const exists = calendarTaskFilter.includes(id);
+    let next;
+    if (exists) {
+      next = calendarTaskFilter.filter((x) => x !== id);
+    } else {
+      next = [...calendarTaskFilter, id];
+    }
+    const finalVal = next.length === 0 ? null : next;
+    setCalendarTaskFilter(finalVal);
+    if (finalVal) {
+      localStorage.setItem(
+        "pocopoco_calendar_task_filter",
+        JSON.stringify(finalVal)
+      );
+    } else {
+      localStorage.removeItem("pocopoco_calendar_task_filter");
+    }
+    setStatusMsg("カレンダーのタスクしぼりこみを更新しました");
+  }
+
+  function isCalendarTaskChecked(id) {
+    if (!calendarTaskFilter) return false;
+    return calendarTaskFilter.includes(id);
+  }
+
+  // ログイン画面へ戻る
+  function handleGoLogin() {
+    localStorage.removeItem("pocopoco_role");
+    localStorage.removeItem("pocopoco_parentAuthed");
+    localStorage.removeItem("pocopoco_current_child_id");
+    window.location.href = "/login";
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "520px",
+        margin: "0 auto",
+      }}
+    >
+      <h1 style={{ fontSize: "20px", fontWeight: 600, marginBottom: "8px" }}>
+        設定
+      </h1>
+
+      {/* モード表示・切替 */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "10px",
+          padding: "10px",
+          marginBottom: "16px",
+          background: role === "parent" ? "#f5ecff" : "#f0f9ff",
+        }}
+      >
+        <div style={{ fontSize: "13px", marginBottom: "4px" }}>
+          現在のモード：{" "}
+          <strong>{role === "parent" ? "👤 親モード" : "🧒 子モード"}</strong>
+        </div>
+        {role === "parent" ? (
+          <button onClick={switchToChild} style={btnMini}>
+            子モードにする
+          </button>
+        ) : (
+          <button onClick={switchToParent} style={btnMini}>
+            親モードにもどる
+          </button>
+        )}
+      </section>
+
+      {/* 子ども管理（親だけ） */}
+      {role === "parent" && (
+        <section
+          style={{
+            border: "1px solid #ddd",
+            borderRadius: "10px",
+            padding: "12px",
+            marginBottom: "20px",
+            background: "#faf8ff",
+          }}
+        >
+          <h2 style={{ fontSize: "16px", fontWeight: 600, marginBottom: "8px" }}>
+            👶 こどものとうろく（5人まで）
+          </h2>
+          {children.length === 0 ? (
+            <div style={{ fontSize: "12px", color: "#777" }}>登録なし</div>
+          ) : (
+            children.map((ch) => (
+              <div
+                key={ch.id}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  borderBottom: "1px solid #eee",
+                  padding: "4px 0",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600 }}>{ch.name}</div>
+                  {ch.birthday && (
+                    <div style={{ fontSize: "12px", color: "#666" }}>
+                      🎂 {ch.birthday}
+                    </div>
+                  )}
+                  {currentChildId === ch.id && (
+                    <div
+                      style={{
+                        display: "inline-block",
+                        fontSize: "11px",
+                        color: "#6a1b9a",
+                        background: "#e0ccff",
+                        borderRadius: "999px",
+                        padding: "1px 6px",
+                        marginTop: "2px",
+                      }}
+                    >
+                      表示中
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <button
+                    onClick={() => handleSetCurrentChild(ch.id)}
+                    style={btnMini}
+                  >
+                    この子を表示
+                  </button>
+                  <button
+                    onClick={() => handleDeleteChild(ch.id)}
+                    style={{ ...btnMini, color: "#a00" }}
+                  >
+                    削除
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+
+          <div style={{ marginTop: "10px" }}>
+            <input
+              type="text"
+              placeholder="なまえ"
+              value={newChildName}
+              onChange={(e) => setNewChildName(e.target.value)}
+              style={inputStyle}
+            />
+            <input
+              type="date"
+              value={newChildBirthday}
+              onChange={(e) => setNewChildBirthday(e.target.value)}
+              style={inputStyle}
+            />
+            <button style={btnPurple} onClick={handleAddChild}>
+              ついか
+            </button>
+          </div>
+        </section>
+      )}
+
+      {/* 言語 */}
+      <section style={cardStyle}>
+        <div style={sectionTitleStyle}>ひょうじげんご</div>
+        <select
+          value={lang}
+          onChange={(e) => setLang(e.target.value)}
+          disabled={role === "child"}
+          style={inputStyle}
+        >
+          <option value="hiragana">にほんご（ひらがな）</option>
+          <option value="jp">にほんご（ふつう）</option>
+          <option value="en">English</option>
+        </select>
+        {role === "parent" && (
+          <button style={purpleButtonStyle} onClick={handleSaveLang}>
+            表示言語を保存
+          </button>
+        )}
+      </section>
+
+      {/* ホームに出すイベント */}
+      <section style={cardStyle}>
+        <div style={sectionTitleStyle}>イベント / 本番の日（ホームに1つ）</div>
+        <input
+          type="text"
+          value={eventTitle}
+          onChange={(e) => setEventTitle(e.target.value)}
+          disabled={role === "child"}
+          style={inputStyle}
+          placeholder="はっぴょうかい など"
+        />
+        <input
+          type="date"
+          value={eventDate}
+          onChange={(e) => setEventDate(e.target.value)}
+          disabled={role === "child"}
+          style={inputStyle}
+        />
+        {role === "parent" && (
+          <button style={deepPurpleButtonStyle} onClick={handleSaveEvent}>
+            イベントを保存
+          </button>
+        )}
+      </section>
+
+      {/* 誕生日 */}
+      <section style={cardStyle}>
+        <div style={sectionTitleStyle}>おたんじょうび</div>
+        <input
+          type="date"
+          value={birthday}
+          onChange={(e) => setBirthday(e.target.value)}
+          disabled={role === "child"}
+          style={inputStyle}
+        />
+        {role === "parent" && (
+          <button style={pinkButtonStyle} onClick={handleSaveBirthday}>
+            おたんじょうびを保存
+          </button>
+        )}
+      </section>
+
+      {/* 親専用セクション */}
+      {role === "parent" && (
+        <>
+          {/* 親コード */}
+          <section style={cardStyle}>
+            <div style={sectionTitleStyle}>おとなのひみつコード（4けた）</div>
+            <input
+              type="password"
+              value={parentCode}
+              onChange={(e) => setParentCode(e.target.value)}
+              style={{ ...inputStyle, letterSpacing: "0.3em" }}
+              placeholder="1234"
+            />
+            <button style={gradientButtonStyle} onClick={handleSaveParentCode}>
+              ひみつコードを保存
+            </button>
+          </section>
+
+          {/* タスク設定 */}
+          <section style={cardStyle}>
+            <div style={sectionTitleStyle}>タスクのせってい</div>
+            <div
+              style={{
+                border: "1px solid #eee",
+                borderRadius: "8px",
+                padding: "8px",
+                marginBottom: "12px",
+              }}
+            >
+              {tasks.map((t, idx) => (
+                <div
+                  key={t.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "4px 0",
+                  }}
+                >
+                  <span>
+                    {t.icon} {t.label}
+                  </span>
+                  <button onClick={() => handleDeleteTask(idx)} style={btnMini}>
+                    けす
+                  </button>
+                </div>
+              ))}
+            </div>
+            <input
+              type="text"
+              value={newTaskIcon}
+              onChange={(e) => setNewTaskIcon(e.target.value)}
+              style={inputStyle}
+              placeholder="🎻"
+            />
+            <input
+              type="text"
+              value={newTaskLabel}
+              onChange={(e) => setNewTaskLabel(e.target.value)}
+              style={inputStyle}
+              placeholder="バイオリン"
+            />
+            <button style={purpleButtonStyle} onClick={handleAddTask}>
+              タスクをついか
+            </button>
+          </section>
+
+          {/* CSV */}
+          <section style={cardStyle}>
+            <div style={sectionTitleStyle}>データのバックアップ / ひっこし</div>
+            <button style={purpleButtonStyle} onClick={handleExportCSV}>
+              📤 CSVでダウンロード
+            </button>
+            <button style={greenButtonStyle} onClick={handleImportClick}>
+              📥 CSVから読み込む
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: "none" }}
+              onChange={handleFileSelected}
+            />
+          </section>
+
+          {/* カレンダーイベント */}
+          <section style={cardStyle}>
+            <div style={sectionTitleStyle}>カレンダーに出すイベント（複数）</div>
+            <div
+              style={{
+                border: "1px solid #eee",
+                borderRadius: "8px",
+                padding: "8px",
+                marginBottom: "8px",
+              }}
+            >
+              {calendarEvents.length === 0 ? (
+                <div style={{ fontSize: "12px", color: "#777" }}>
+                  （まだありません）
+                </div>
+              ) : (
+                calendarEvents.map((ev) => (
+                  <div
+                    key={ev.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    <div>
+                      {ev.mark || "EV"} {ev.title} ({ev.date})
+                    </div>
+                    <button
+                      onClick={() => handleDeleteCalendarEvent(ev.id)}
+                      style={btnMini}
+                    >
+                      けす
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            <input
+              type="text"
+              value={newCalEventTitle}
+              onChange={(e) => setNewCalEventTitle(e.target.value)}
+              style={inputStyle}
+              placeholder="イベント名"
+            />
+            <input
+              type="date"
+              value={newCalEventDate}
+              onChange={(e) => setNewCalEventDate(e.target.value)}
+              style={inputStyle}
+            />
+            <input
+              type="text"
+              value={newCalEventMark}
+              onChange={(e) => setNewCalEventMark(e.target.value)}
+              style={inputStyle}
+              placeholder="🎵"
+            />
+            <button style={purpleButtonStyle} onClick={handleAddCalendarEvent}>
+              追加
+            </button>
+          </section>
+
+          {/* カレンダーに反映するタスク */}
+          <section style={cardStyle}>
+            <div style={sectionTitleStyle}>カレンダーに反映するタスク</div>
+            {tasks.map((t) => (
+              <label
+                key={t.id}
+                style={{ display: "flex", gap: "6px", alignItems: "center" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={isCalendarTaskChecked(t.id)}
+                  onChange={() => handleToggleCalendarTask(t.id)}
+                />
+                <span>
+                  {t.icon} {t.label}
+                </span>
+              </label>
+            ))}
+          </section>
+        </>
+      )}
+
+      {/* ログイン画面へ戻る */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "10px",
+          padding: "12px",
+          marginBottom: "16px",
+          background: "#fff",
+        }}
+      >
+        <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "8px" }}>
+          ログイン・モードをやりなおす
+        </div>
+        <p style={{ fontSize: "12px", color: "#666", marginBottom: "8px" }}>
+          いちどログイン画面にもどって、もういちど 親 / 子 をえらびなおします。
+        </p>
+        <button
+          onClick={handleGoLogin}
+          style={{
+            width: "100%",
+            background: "#eee",
+            border: "1px solid #ccc",
+            borderRadius: "8px",
+            padding: "8px 12px",
+            fontSize: "13px",
+          }}
+        >
+          ログイン画面にもどる
+        </button>
+      </section>
+
+      {/* ★ 追加：アプリ情報・法務・ガイド */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "10px",
+          padding: "14px",
+          marginBottom: "20px",
+          background: "#fafafa",
+        }}
+      >
+        <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "6px" }}>
+          ℹ️ アプリ情報
+        </div>
+        <div style={{ fontSize: "13px", color: "#333", marginBottom: "4px" }}>
+          <strong>pocoapoco</strong> v1.0.3（更新日：2025-11-04）
+        </div>
+        <div style={{ fontSize: "12px", color: "#666", marginBottom: "12px" }}>
+          © 2025 Hardy Inc. All rights reserved.
+        </div>
+
+        <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "6px" }}>
+          📜 法律上の表示
+        </div>
+        <ul style={{ fontSize: "13px", lineHeight: 1.6, marginBottom: "12px" }}>
+          <li>
+            <a
+              href="https://example.com/terms"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "#6a1b9a", textDecoration: "underline" }}
+            >
+              利用規約
+            </a>
+          </li>
+          <li>
+            <a
+              href="https://example.com/privacy"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "#6a1b9a", textDecoration: "underline" }}
+            >
+              プライバシーポリシー
+            </a>
+          </li>
+          <li>
+            <a
+              href="https://example.com/law"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "#6a1b9a", textDecoration: "underline" }}
+            >
+              特定商取引法に基づく表記
+            </a>
+          </li>
+        </ul>
+
+        <div style={{ fontSize: "14px", fontWeight: 600, marginBottom: "6px" }}>
+          💬 つかいかたガイド
+        </div>
+        <p style={{ fontSize: "13px", color: "#444", lineHeight: 1.6 }}>
+          くわしい使い方や最新情報は{" "}
+          <a
+            href="https://www.instagram.com/chocoonlabo"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#6a1b9a", fontWeight: "600" }}
+          >
+            Instagram @chocoonlabo
+          </a>{" "}
+          で発信しています。
+        </p>
+      </section>
+
+      {statusMsg && (
+        <div
+          style={{
+            background: "#f5ecff",
+            border: "1px solid #e0ccff",
+            borderRadius: "8px",
+            padding: "8px 12px",
+            marginTop: "12px",
+            fontSize: "13px",
+          }}
+        >
+          {statusMsg}
+        </div>
+      )}
+
+      <div style={{ textAlign: "center", marginTop: "18px" }}>
+        <button
+          onClick={() => (window.location.href = "/")}
+          style={{ background: "none", border: "none", color: "#666" }}
+        >
+          ← ホームにもどる
+        </button>
+      </div>
+    </main>
+  );
+}
+
+/* ===== style objects ===== */
+const inputStyle = {
+  width: "100%",
+  padding: "6px 8px",
+  border: "1px solid #ccc",
+  borderRadius: "6px",
+  fontSize: "13px",
+  marginBottom: "6px",
+};
+const cardStyle = {
+  border: "1px solid #ddd",
+  borderRadius: "12px",
+  padding: "16px",
+  marginBottom: "16px",
+  background: "#fff",
+};
+const sectionTitleStyle = {
+  fontSize: "14px",
+  fontWeight: 600,
+  marginBottom: "8px",
+};
+const btnMini = {
+  border: "1px solid #ccc",
+  borderRadius: "6px",
+  background: "#fff",
+  fontSize: "12px",
+  padding: "2px 8px",
+  cursor: "pointer",
+};
+const btnPurple = {
+  background: "#6a1b9a",
+  color: "#fff",
+  border: "none",
+  borderRadius: "8px",
+  padding: "6px 10px",
+  fontWeight: "600",
+  fontSize: "13px",
+  cursor: "pointer",
+};
+const purpleButtonStyle = {
+  width: "100%",
+  backgroundColor: "#4a148c",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "14px",
+  fontWeight: "600",
+  padding: "10px 12px",
+  marginTop: "4px",
+};
+const deepPurpleButtonStyle = {
+  width: "100%",
+  backgroundColor: "#6a1b9a",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "14px",
+  fontWeight: "600",
+  padding: "10px 12px",
+};
+const pinkButtonStyle = {
+  width: "100%",
+  backgroundColor: "#d81b60",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "14px",
+  fontWeight: "600",
+  padding: "10px 12px",
+};
+const gradientButtonStyle = {
+  width: "100%",
+  background: "linear-gradient(90deg, rgb(204,0,255), rgb(255,102,153))",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "14px",
+  fontWeight: "600",
+  padding: "10px 12px",
+};
+const greenButtonStyle = {
+  width: "100%",
+  backgroundColor: "#00695c",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "14px",
+  fontWeight: "600",
+  padding: "10px 12px",
+};

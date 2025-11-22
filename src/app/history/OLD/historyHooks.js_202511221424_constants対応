@@ -1,0 +1,436 @@
+import { useEffect, useRef, useState, useMemo } from "react";
+import { LS_SONGS } from "../constants";
+import {
+  collectAvailableTasks,
+  buildChartData,
+  parseCsvToRecords,
+} from "./historyUtils";
+
+export function useHistoryPageLogic() {
+  const [records, setRecords] = useState([]);
+  const [summary, setSummary] = useState({
+    totalMinutes: 0,
+    totalCount: 0,
+    todayCount: 0,
+  });
+  const [taskDict, setTaskDict] = useState({}); // task_id -> label
+  const [songsDict, setSongsDict] = useState({}); // song_id -> title
+
+  // 子ども一覧と、表示中の子
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("all");
+
+  // ロール（親 / 子）
+  const [role, setRole] = useState("parent");
+
+  // タスクフィルタ用
+  const [availableTasks, setAvailableTasks] = useState([]); // {id,label}[]
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]); // key[]
+  const [isTaskSelectorOpen, setIsTaskSelectorOpen] = useState(false);
+
+  // 期間（日/週/月/すべて）
+  const [periodType, setPeriodType] = useState("month"); // "day" | "week" | "month" | "all"
+
+  // CSV入出力
+  const fileInputRef = useRef(null);
+
+  // 初期読み込み
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    loadTasksForNameResolve();
+    loadSongsForNameResolve();
+
+    // クエリパラメータ（childId, mode）
+    let childIdFromQuery = "";
+    let modeFromQuery = "";
+    try {
+      const params = new URLSearchParams(window.location.search);
+      childIdFromQuery = params.get("childId") || "";
+      modeFromQuery = params.get("mode") || "";
+    } catch {
+      /* ignore */
+    }
+
+    // 子ども一覧
+    let loadedChildren = [];
+    try {
+      const rawChildren = localStorage.getItem("pocopoco_children");
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) {
+          loadedChildren = arr;
+          setChildren(arr);
+        }
+      }
+    } catch (e) {
+      console.warn("failed to load children", e);
+    }
+
+    // ロール判定
+    let detectedRole = "parent";
+    try {
+      const savedRole = localStorage.getItem("pocopoco_role");
+      const savedMode = localStorage.getItem("pocopoco_mode");
+      if (
+        modeFromQuery === "child" ||
+        savedMode === "child" ||
+        savedRole === "child"
+      ) {
+        detectedRole = "child";
+      } else if (savedRole === "parent") {
+        detectedRole = "parent";
+      }
+      setRole(detectedRole);
+    } catch (e) {
+      console.warn("failed to load role", e);
+    }
+
+    // 現在の子ID（古いキーと新しいキー両方を見る）
+    let savedCurrentChild =
+      localStorage.getItem("pocopoco_current_child_id") ||
+      localStorage.getItem("pocopoco_currentChildId") ||
+      "";
+
+    if (detectedRole === "child") {
+      // 子モード：クエリ childId が有効ならそれを優先
+      if (
+        childIdFromQuery &&
+        childIdFromQuery !== "all" &&
+        loadedChildren.find((c) => c.id === childIdFromQuery)
+      ) {
+        savedCurrentChild = childIdFromQuery;
+      } else if (
+        (!savedCurrentChild || savedCurrentChild === "all") &&
+        loadedChildren.length > 0
+      ) {
+        savedCurrentChild = loadedChildren[0].id;
+      }
+      setCurrentChildId(savedCurrentChild || "");
+    } else {
+      // 親モード：クエリ childId が有効ならそれを優先、それ以外は all も許可
+      if (
+        childIdFromQuery &&
+        childIdFromQuery !== "all" &&
+        loadedChildren.find((c) => c.id === childIdFromQuery)
+      ) {
+        savedCurrentChild = childIdFromQuery;
+      }
+      setCurrentChildId(savedCurrentChild || "all");
+    }
+
+    loadHistory(savedCurrentChild || "all", detectedRole);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 子 or records が変わったら今日のサマリーを再計算
+  useEffect(() => {
+    recalcSummaryForCurrentChild(records, currentChildId, role);
+  }, [records, currentChildId, role]);
+
+  // records or taskDict が変わったら、タスク候補を更新
+  useEffect(() => {
+    const { tasks } = collectAvailableTasks(records, taskDict);
+    setAvailableTasks(tasks);
+    if (selectedTaskIds.length === 0 && tasks.length > 0) {
+      // 初期は「すべて選択」
+      setSelectedTaskIds(tasks.map((t) => t.id));
+    }
+  }, [records, taskDict]);
+
+  // 設定画面で保存してあるタスクを読む（id→label）
+  function loadTasksForNameResolve() {
+    try {
+      const raw = localStorage.getItem("pocopoco_tasks");
+      if (!raw) return;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return;
+      const dict = {};
+      list.forEach((t) => {
+        if (t.id) {
+          dict[t.id] = t.label || t.name || t.id;
+        }
+      });
+      setTaskDict(dict);
+    } catch (e) {
+      console.warn("failed to load tasks for history name mapping", e);
+    }
+  }
+
+  // 曲データを読み込み（song_id → 曲名）
+  function loadSongsForNameResolve() {
+    try {
+      const raw = localStorage.getItem(LS_SONGS);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      const dict = {};
+
+      const addSong = (s) => {
+        if (!s || typeof s !== "object") return;
+        const id = s.id || s.song_id || s.songId;
+        if (!id) return;
+        const title =
+          s.title ||
+          s.name ||
+          s.label ||
+          s.song_title ||
+          s.songName ||
+          s.song_name;
+        if (!title) return;
+        dict[id] = title;
+      };
+
+      if (Array.isArray(data)) {
+        data.forEach(addSong);
+      } else if (data && typeof data === "object") {
+        Object.values(data).forEach((v) => {
+          if (Array.isArray(v)) {
+            v.forEach(addSong);
+          }
+        });
+      }
+
+      setSongsDict(dict);
+    } catch (e) {
+      console.warn("failed to load songs for history name mapping", e);
+    }
+  }
+
+  // localStorage から履歴を読み込み
+  function loadHistory(initialChildId, detectedRole) {
+    try {
+      const raw = localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return;
+      setRecords(data);
+      recalcSummaryForCurrentChild(
+        data,
+        initialChildId || currentChildId,
+        detectedRole || role
+      );
+    } catch (e) {
+      console.error("failed to load history", e);
+    }
+  }
+
+  // 子どもで絞り込んで合計時間・回数を集計（今日分のみ）
+  function recalcSummaryForCurrentChild(
+    allRecords,
+    targetChildId,
+    currentRole
+  ) {
+    const today = new Date().toISOString().slice(0, 10);
+    const target = String(targetChildId ?? "");
+    const isChildRole = currentRole === "child";
+
+    const todayRecords = allRecords.filter((r) => {
+      const started = r.startedAt || "";
+      if (!started.startsWith(today)) return false;
+
+      const recordChildId = String(r.child_id ?? "");
+
+      // 子モードなら常に自分
+      if (isChildRole) {
+        if (!target || target === "all") return false;
+        return recordChildId === target;
+      }
+
+      // 親モード
+      if (target === "all" || !target) return true;
+      return recordChildId === target;
+    });
+
+    const totalSeconds = todayRecords.reduce(
+      (sum, r) => sum + (r.seconds || 0),
+      0
+    );
+    const totalCount = todayRecords.reduce(
+      (sum, r) => sum + (r.count || 0),
+      0
+    );
+
+    setSummary({
+      totalMinutes: Math.floor(totalSeconds / 60),
+      totalCount,
+      todayCount: todayRecords.length,
+    });
+  }
+
+  // 今選択してる子どもで絞った履歴（ロール別）
+  const recordsByChild = useMemo(() => {
+    const current = String(currentChildId ?? "");
+    if (role === "child") {
+      if (!current || current === "all") return [];
+      return records.filter((r) => String(r.child_id ?? "") === current);
+    }
+    if (current === "all" || !current) return records;
+    return records.filter((r) => String(r.child_id ?? "") === current);
+  }, [records, currentChildId, role]);
+
+  // タスクフィルタを適用
+  const filteredRecords =
+    selectedTaskIds.length === 0
+      ? recordsByChild
+      : recordsByChild.filter((r) =>
+          selectedTaskIds.includes(getTaskKeyForFilter(r))
+        );
+
+  // レコード → 配列インデックスのマップ（O(n²) 回避用）
+  const recordIndexMap = useMemo(() => {
+    const map = new Map();
+    records.forEach((r, idx) => {
+      map.set(r, idx);
+    });
+    return map;
+  }, [records]);
+
+  // 表示用（新しい順）＋元配列の絶対インデックスを保持
+  const decoratedList = useMemo(() => {
+    const tmp = filteredRecords
+      .map((r) => {
+        const idx = recordIndexMap.get(r);
+        return { absoluteIndex: idx ?? -1, record: r };
+      })
+      .filter((item) => item.absoluteIndex !== -1)
+      .reverse();
+    return tmp;
+  }, [filteredRecords, recordIndexMap]);
+
+  // グラフ用データ
+  const chartData = useMemo(
+    () => buildChartData(filteredRecords, periodType),
+    [filteredRecords, periodType]
+  );
+
+  // 親なら編集へ、子ならアラートだけ
+  function handleEditClick(absoluteIndex) {
+    if (role !== "parent") {
+      alert("このきろくの編集は おとなだけができます。");
+      return;
+    }
+    if (absoluteIndex == null || absoluteIndex < 0) return;
+    window.location.href = `/history/edit?id=${absoluteIndex}`;
+  }
+
+  // CSV出力
+  function handleExportCsv() {
+    if (records.length === 0) {
+      alert("まだきろくがありません。");
+      return;
+    }
+
+    const header = [
+      "startedAt",
+      "child_id",
+      "task_id",
+      "task_title",
+      "seconds",
+      "count",
+      "memo",
+    ];
+    const lines = [header.join(",")];
+
+    records.forEach((r) => {
+      const row = [
+        r.startedAt || "",
+        r.child_id || "",
+        r.task_id || "",
+        (r.task_title || r.task || "").replace(/,/g, " "),
+        String(r.seconds || 0),
+        String(r.count || 0),
+        (r.memo || "").replace(new RegExp("[\\n,]", "g"), " "),
+      ];
+      lines.push(row.join(","));
+    });
+
+    // UTF-8 BOM を付ける（Excel文字化け対策）
+    const csv = "\uFEFF" + lines.join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "pocopoco_history.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // CSV取込
+  function handleImportClick() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  }
+
+  function handleImportChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result;
+      if (typeof text !== "string") return;
+
+      const imported = parseCsvToRecords(text);
+      if (imported.length === 0) {
+        alert("読み込みできるデータが見つかりませんでした。");
+        return;
+      }
+
+      const merged = [...records, ...imported];
+      merged.sort((a, b) => {
+        const da = new Date(a.startedAt || 0).getTime();
+        const db = new Date(b.startedAt || 0).getTime();
+        return da - db;
+      });
+
+      setRecords(merged);
+      try {
+        localStorage.setItem("pocopoco_history", JSON.stringify(merged));
+      } catch (err) {
+        console.error("failed to save imported history", err);
+      }
+
+      alert(`きろくを ${imported.length} 件 ついかしました。`);
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  // タスクキー（フィルタ用、一意にする）
+  function getTaskKeyForFilter(record) {
+    if (record.task_id) return `id:${record.task_id}`;
+    if (record.task_title) return `title:${record.task_title}`;
+    if (record.task) return `name:${record.task}`;
+    return "unknown";
+  }
+
+  return {
+    // state
+    records,
+    summary,
+    taskDict,
+    songsDict,
+    children,
+    currentChildId,
+    setCurrentChildId,
+    role,
+    availableTasks,
+    selectedTaskIds,
+    setSelectedTaskIds,
+    isTaskSelectorOpen,
+    setIsTaskSelectorOpen,
+    periodType,
+    setPeriodType,
+    fileInputRef,
+    // derived
+    decoratedList,
+    chartData,
+    // handlers
+    handleEditClick,
+    handleExportCsv,
+    handleImportClick,
+    handleImportChange,
+  };
+}

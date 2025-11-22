@@ -1,0 +1,891 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import {
+  LS_CHILDREN,
+  LS_CURRENT_CHILD_ID,
+  LS_HISTORY,
+  LS_SONGS,
+  LS_TASKS,
+  LS_LANGUAGE,
+  LS_MODE,
+} from "@/app/constants";
+
+import { t, formatDateLocalized } from "@/app/lib/i18n";
+import Chart from "chart.js/auto";
+import { Line } from "react-chartjs-2";
+
+/* =================================================
+   Part 1 / 4
+   履歴画面のロジック基盤（旧UIベース）
+   ------------------------------------------------- */
+
+export default function HistoryPage() {
+  /* --------------------------------------------
+   * localStorage 読み出し
+   * -------------------------------------------- */
+
+  const [childrenList, setChildrenList] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState(null);
+
+  const [history, setHistory] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [songs, setSongs] = useState([]);
+
+  const [language, setLanguage] = useState("ja");
+  const [mode, setMode] = useState("parent");
+
+  useEffect(() => {
+    try {
+      const storedChildren = JSON.parse(localStorage.getItem(LS_CHILDREN)) ?? [];
+      const storedCurrent = localStorage.getItem(LS_CURRENT_CHILD_ID);
+      const storedHistory = JSON.parse(localStorage.getItem(LS_HISTORY)) ?? [];
+      const storedTasks = JSON.parse(localStorage.getItem(LS_TASKS)) ?? [];
+      const storedSongs = JSON.parse(localStorage.getItem(LS_SONGS)) ?? [];
+      const storedLang = localStorage.getItem(LS_LANGUAGE) ?? "ja";
+      const storedMode = localStorage.getItem(LS_MODE) ?? "parent";
+
+      setChildrenList(storedChildren);
+      setCurrentChildId(storedCurrent);
+      setHistory(storedHistory);
+      setTasks(storedTasks);
+      setSongs(storedSongs);
+      setLanguage(storedLang);
+      setMode(storedMode);
+    } catch (e) {
+      console.error("localStorage read error:", e);
+    }
+  }, []);
+
+  /* --------------------------------------------
+   * 有効な history の抽出（特定の子ども分）
+   * -------------------------------------------- */
+  const filteredHistory = history.filter(
+    (h) => h.childId === currentChildId
+  );
+
+  /* --------------------------------------------
+   * タスクフィルタ（旧UIで使用していた形）
+   * -------------------------------------------- */
+  const [taskFilter, setTaskFilter] = useState("all");
+
+  const availableTaskIds = tasks.map((t) => t.id);
+
+  const taskFilteredHistory =
+    taskFilter === "all"
+      ? filteredHistory
+      : filteredHistory.filter((h) => h.taskId === taskFilter);
+
+  /* --------------------------------------------
+   * グラフ用データを整形
+   * -------------------------------------------- */
+
+  const graphData = (() => {
+    const map = {};
+    taskFilteredHistory.forEach((h) => {
+      const key = h.date;
+      if (!map[key]) map[key] = 0;
+      map[key] += h.duration;
+    });
+    const sorted = Object.keys(map).sort();
+    return {
+      labels: sorted.map((d) => formatDateLocalized(d, language)),
+      values: sorted.map((d) => map[d]),
+    };
+  })();
+
+  /* --------------------------------------------
+   * 今日のまとめ
+   * -------------------------------------------- */
+
+  const todayKey = (() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = (d.getMonth() + 1).toString().padStart(2, "0");
+    const day = d.getDate().toString().padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  })();
+
+  const todayHistory = taskFilteredHistory.filter(
+    (h) => h.date === todayKey
+  );
+
+  const todayTotalMinutes = todayHistory.reduce(
+    (sum, h) => sum + h.duration,
+    0
+  );
+  const todayCount = todayHistory.length;
+
+  /* --------------------------------------------
+   * 曲名・タスク名（旧互換ロジック含む）
+   * -------------------------------------------- */
+
+  const getTaskName = (taskId) => {
+    const f = tasks.find((t) => t.id === taskId);
+    if (f) return f.name ?? f.task ?? "";
+    return "";
+  };
+
+  const getSongName = (songId) => {
+    const f = songs.find((s) => s.id === songId);
+    if (f) return f.name ?? f.song ?? "";
+    return "";
+  };
+
+  /* --------------------------------------------
+   * CSV 出力（強化版：UTF-8+BOM）
+   * -------------------------------------------- */
+
+  const handleExportCSV = () => {
+    const headers = [
+      "id",
+      "childId",
+      "taskId",
+      "songId",
+      "duration",
+      "date",
+      "memo",
+    ];
+
+    const rows = taskFilteredHistory.map((h) => [
+      h.id,
+      h.childId,
+      h.taskId,
+      h.songId,
+      h.duration,
+      h.date,
+      (h.memo ?? "").replace(/\n/g, "\\n"),
+    ]);
+
+    const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join(
+      "\n"
+    );
+
+    const blob = new Blob(["\uFEFF" + csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "history.csv";
+    a.click();
+  };
+
+  /* --------------------------------------------
+   * CSV 読み込み（強化版：ヘッダ一致チェック＋上書き）
+   * -------------------------------------------- */
+
+  const handleImportCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const expectedHeader =
+      "id,childId,taskId,songId,duration,date,memo";
+
+    const reader = new FileReader();
+
+    reader.onload = (evt) => {
+      const text = evt.target.result;
+      const lines = text.split(/\r?\n/);
+
+      if (lines[0].trim() !== expectedHeader) {
+        alert("CSVヘッダが一致しません。正しい形式のCSVを選んでください。");
+        return;
+      }
+
+      const newRecords = [];
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = line.split(",");
+
+        const [id, childId, taskId, songId, duration, date, memo] = parts;
+        newRecords.push({
+          id,
+          childId,
+          taskId,
+          songId,
+          duration: Number(duration),
+          date,
+          memo: memo?.replace(/\\n/g, "\n") ?? "",
+        });
+      }
+
+      const all = [
+        ...history.filter((h) => h.childId !== currentChildId),
+        ...newRecords,
+      ];
+
+      setHistory(all);
+      localStorage.setItem(LS_HISTORY, JSON.stringify(all));
+      alert("CSV の読み込み・上書きが完了しました。");
+    };
+
+    reader.readAsText(file, "UTF-8");
+  };
+
+  /* --------------------------------------------
+   * EditModal 用の state
+   * -------------------------------------------- */
+
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingRecord, setEditingRecord] = useState(null);
+
+  const openEdit = (h) => {
+    setEditingRecord(h);
+    setShowEditModal(true);
+  };
+
+  const closeEdit = () => {
+    setShowEditModal(false);
+    setEditingRecord(null);
+  };
+
+  const saveEdit = () => {
+    if (!editingRecord) return;
+    const updated = history.map((h) =>
+      h.id === editingRecord.id ? editingRecord : h
+    );
+    setHistory(updated);
+    localStorage.setItem(LS_HISTORY, JSON.stringify(updated));
+    closeEdit();
+  };
+  /* --------------------------------------------
+   * タスクセレクタモーダル用の state
+   * （旧UIの「タスクをえらぶ」相当）
+   * -------------------------------------------- */
+
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [tempTaskFilter, setTempTaskFilter] = useState(taskFilter);
+
+  const openTaskModal = () => {
+    setTempTaskFilter(taskFilter);
+    setShowTaskModal(true);
+  };
+
+  const closeTaskModal = () => {
+    setShowTaskModal(false);
+  };
+
+  const applyTaskModal = () => {
+    setTaskFilter(tempTaskFilter);
+    setShowTaskModal(false);
+  };
+
+  const selectTaskInModal = (taskId) => {
+    setTempTaskFilter(taskId);
+  };
+
+  /* --------------------------------------------
+   * タスクセレクタモーダル（単一選択版）
+   * -------------------------------------------- */
+
+  const TaskSelectorModal = () => {
+    if (!showTaskModal) return null;
+
+    return (
+      <div
+        className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50"
+        onClick={closeTaskModal}
+      >
+        <div
+          className="bg-white rounded-xl p-4 w-80 shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2 className="text-base font-bold mb-3 text-gray-800">
+            {t("historySelectTaskTitle", language)}
+          </h2>
+
+          <div className="max-h-48 overflow-y-auto mb-4 space-y-2">
+            {/* 全タスク */}
+            <div
+              className="flex items-center space-x-2 cursor-pointer"
+              onClick={() => selectTaskInModal("all")}
+            >
+              <input
+                type="radio"
+                checked={tempTaskFilter === "all"}
+                readOnly
+              />
+              <span className="text-sm text-gray-800">
+                {t("historyAllTasks", language)}
+              </span>
+            </div>
+
+            {/* 個別タスク */}
+            {tasks.map((task) => (
+              <div
+                key={task.id}
+                className="flex items-center space-x-2 cursor-pointer"
+                onClick={() => selectTaskInModal(task.id)}
+              >
+                <input
+                  type="radio"
+                  checked={tempTaskFilter === task.id}
+                  readOnly
+                />
+                <span className="text-sm text-gray-800">
+                  {task.name ?? task.task ?? ""}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end space-x-3">
+            <button
+              className="px-3 py-1.5 text-xs rounded-lg bg-gray-200 text-gray-700"
+              onClick={closeTaskModal}
+            >
+              {t("cancel", language)}
+            </button>
+            <button
+              className="px-3 py-1.5 text-xs rounded-lg bg-purple-600 text-white"
+              onClick={applyTaskModal}
+            >
+              {t("ok", language)}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  /* --------------------------------------------
+   * メモ編集モーダル（EditModal）
+   * -------------------------------------------- */
+
+  const EditModal = () => {
+    if (!showEditModal || !editingRecord) return null;
+
+    return (
+      <div
+        className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50"
+        onClick={closeEdit}
+      >
+        <div
+          className="bg-white rounded-xl p-4 w-80 shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2 className="text-base font-bold mb-3 text-gray-800">
+            {t("historyEditTitle", language)}
+          </h2>
+
+          <textarea
+            className="w-full border rounded-lg p-2 text-sm h-32"
+            value={editingRecord.memo ?? ""}
+            onChange={(e) =>
+              setEditingRecord({
+                ...editingRecord,
+                memo: e.target.value,
+              })
+            }
+          />
+
+          <div className="flex justify-end space-x-3 mt-3">
+            <button
+              className="px-3 py-1.5 text-xs rounded-lg bg-gray-200 text-gray-700"
+              onClick={closeEdit}
+            >
+              {t("cancel", language)}
+            </button>
+            <button
+              className="px-3 py-1.5 text-xs rounded-lg bg-purple-600 text-white"
+              onClick={saveEdit}
+            >
+              {t("save", language)}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  /* --------------------------------------------
+   * 画面全体の return（旧UIベース）
+   * -------------------------------------------- */
+
+  return (
+    <main style={{ padding: "16px" }}>
+      {/* モーダル類 */}
+      <TaskSelectorModal />
+      <EditModal />
+
+      {/* 子ども切り替え（親モードのみ） */}
+      {mode === "parent" && childrenList.length > 0 && (
+        <div
+          style={{
+            marginBottom: "10px",
+            display: "flex",
+            gap: "6px",
+            flexWrap: "wrap",
+          }}
+        >
+          {childrenList.map((ch) => (
+            <button
+              key={ch.id}
+              onClick={() => setCurrentChildId(ch.id)}
+              style={{
+                border:
+                  currentChildId === ch.id
+                    ? "1px solid #6a1b9a"
+                    : "1px solid #ccc",
+                background: "#fff",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "12px",
+                color: currentChildId === ch.id ? "#6a1b9a" : "#555",
+              }}
+            >
+              {ch.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 子モードの注意書き */}
+      {mode === "child" && (
+        <p style={{ fontSize: "11px", color: "#c06", marginTop: "4px" }}>
+          ※ {t("childModeNotice", language)}
+        </p>
+      )}
+
+      {/* タスクフィルタ＆CSVボタン行 */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#faf5ff",
+          border: "1px solid #e0ccff",
+          padding: "10px 12px",
+          marginBottom: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          {/* タスク選択ボタン */}
+          <button
+            onClick={openTaskModal}
+            style={{
+              flex: 1,
+              borderRadius: "999px",
+              border: "1px solid #6a1b9a",
+              padding: "4px 10px",
+              fontSize: "13px",
+              background: "#fff",
+              textAlign: "left",
+            }}
+          >
+            {taskFilter === "all"
+              ? t("historyAllTasks", language)
+              : getTaskName(taskFilter) ||
+                t("historyAllTasks", language)}
+          </button>
+
+          {/* CSV ボタン（親モードのみ） */}
+          {mode === "parent" && (
+            <div style={{ display: "flex", gap: "4px" }}>
+              <button
+                onClick={handleExportCSV}
+                style={{
+                  borderRadius: "999px",
+                  border: "1px solid #bbb",
+                  padding: "4px 8px",
+                  fontSize: "11px",
+                  background: "#fff",
+                }}
+              >
+                {t("historyCsvExport", language)}
+              </button>
+
+              <label
+                style={{
+                  borderRadius: "999px",
+                  border: "1px solid #bbb",
+                  padding: "4px 8px",
+                  fontSize: "11px",
+                  background: "#fff",
+                  cursor: "pointer",
+                }}
+              >
+                {t("historyCsvImport", language)}
+                <input
+                  type="file"
+                  accept=".csv"
+                  style={{ display: "none" }}
+                  onChange={handleImportCSV}
+                />
+              </label>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* グラフエリア */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#ffffff",
+          border: "1px solid #e0ccff",
+          padding: "12px",
+          marginBottom: "16px",
+        }}
+      >
+        <h2
+          style={{
+            margin: "0 0 8px 0",
+            fontSize: "16px",
+            fontWeight: "600",
+            color: "#6a1b9a",
+          }}
+        >
+          {t("historyGraphTitle", language)}
+        </h2>
+
+        {graphData.labels.length === 0 ? (
+          <p
+            style={{
+              fontSize: "12px",
+              color: "#999",
+              margin: 0,
+              padding: "12px 0",
+              textAlign: "center",
+            }}
+          >
+            {t("historyNoData", language)}
+          </p>
+        ) : (
+          <div style={{ width: "100%", height: "220px" }}>
+            <Line
+              data={{
+                labels: graphData.labels,
+                datasets: [
+                  {
+                    label: t("historyMinutesUnit", language),
+                    data: graphData.values,
+                    borderColor: "#ba68c8",
+                    backgroundColor: "rgba(186,104,200,0.2)",
+                    tension: 0.2,
+                  },
+                ],
+              }}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                  legend: {
+                    display: false,
+                  },
+                },
+                scales: {
+                  y: {
+                    ticks: {
+                      callback: (value) =>
+                        `${value}${t("historyMinutesUnit", language)}`,
+                    },
+                  },
+                },
+              }}
+            />
+          </div>
+        )}
+      </section>
+
+      {/* 今日のまとめ */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#ffffff",
+          border: "1px solid #e0ccff",
+          padding: "12px",
+          marginBottom: "16px",
+        }}
+      >
+        <h2
+          style={{
+            margin: "0 0 12px 0",
+            fontSize: "16px",
+            fontWeight: "600",
+            color: "#6a1b9a",
+          }}
+        >
+          {t("historyTodaySummary", language)}
+        </h2>
+
+        {todayHistory.length === 0 ? (
+          <p
+            style={{
+              fontSize: "12px",
+              color: "#999",
+              margin: 0,
+              padding: "12px 0",
+              textAlign: "center",
+            }}
+          >
+            {t("historyNoData", language)}
+          </p>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "8px",
+              flexWrap: "wrap",
+            }}
+          >
+            {/* 合計時間 */}
+            <div
+              style={{
+                flex: 1,
+                minWidth: "90px",
+                background: "#faf5ff",
+                borderRadius: "12px",
+                border: "1px solid #e0ccff",
+                padding: "10px",
+                textAlign: "center",
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#6a1b9a",
+                  margin: 0,
+                  marginBottom: "4px",
+                }}
+              >
+                {t("historyTotalTime", language)}
+              </p>
+              <p
+                style={{
+                  fontSize: "20px",
+                  margin: 0,
+                  fontWeight: "600",
+                  color: "#333",
+                }}
+              >
+                {todayTotalMinutes}
+                <span
+                  style={{
+                    fontSize: "12px",
+                    marginLeft: "2px",
+                  }}
+                >
+                  {t("historyMinutesUnit", language)}
+                </span>
+              </p>
+            </div>
+
+            {/* 合計回数 */}
+            <div
+              style={{
+                flex: 1,
+                minWidth: "90px",
+                background: "#faf5ff",
+                borderRadius: "12px",
+                border: "1px solid #e0ccff",
+                padding: "10px",
+                textAlign: "center",
+              }}
+            >
+              <p
+                style={{
+                  fontSize: "12px",
+                  color: "#6a1b9a",
+                  margin: 0,
+                  marginBottom: "4px",
+                }}
+              >
+                {t("historyTotalCounts", language)}
+              </p>
+              <p
+                style={{
+                  fontSize: "20px",
+                  margin: 0,
+                  fontWeight: "600",
+                  color: "#333",
+                }}
+              >
+                {todayCount}
+                <span
+                  style={{
+                    fontSize: "12px",
+                    marginLeft: "2px",
+                  }}
+                >
+                  {t("historyTimesUnit", language)}
+                </span>
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+      {/* 履歴リスト */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#ffffff",
+          border: "1px solid #e0ccff",
+          padding: "12px",
+          marginBottom: "20px",
+        }}
+      >
+        <h2
+          style={{
+            margin: "0 0 12px 0",
+            fontSize: "16px",
+            fontWeight: "600",
+            color: "#6a1b9a",
+          }}
+        >
+          {t("historyListTitle", language)}
+        </h2>
+
+        {filteredHistory.length === 0 ? (
+          <p
+            style={{
+              fontSize: "12px",
+              color: "#999",
+              margin: 0,
+              padding: "12px 0",
+              textAlign: "center",
+            }}
+          >
+            {t("historyNoData", language)}
+          </p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {filteredHistory.map((rec) => (
+              <div
+                key={rec.id}
+                style={{
+                  borderRadius: "12px",
+                  border: "1px solid #e0ccff",
+                  background: "#faf5ff",
+                  padding: "10px 12px",
+                }}
+              >
+                {/* 1行目：曲名＋タスク名 */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    marginBottom: "6px",
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "14px",
+                        fontWeight: "600",
+                        color: "#6a1b9a",
+                      }}
+                    >
+                      {/* 曲名表示が新仕様のポイント */}
+                      {rec.songName
+                        ? rec.songName
+                        : t("historyUnknownSong", language)}
+                    </p>
+
+                    <p
+                      style={{
+                        margin: "2px 0 0 0",
+                        fontSize: "12px",
+                        color: "#555",
+                      }}
+                    >
+                      {getTaskName(rec.taskId) || "-"}
+                    </p>
+                  </div>
+
+                  {/* 編集ボタン（親モードのみ） */}
+                  {mode === "parent" && (
+                    <button
+                      onClick={() => openEdit(rec)}
+                      style={{
+                        borderRadius: "8px",
+                        border: "1px solid #bbb",
+                        padding: "2px 8px",
+                        fontSize: "12px",
+                        background: "#fff",
+                        height: "28px",
+                      }}
+                    >
+                      {t("edit", language)}
+                    </button>
+                  )}
+                </div>
+
+                {/* 2行目：時間・回数 */}
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "12px",
+                    marginBottom: "6px",
+                  }}
+                >
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: "13px",
+                      color: "#333",
+                    }}
+                  >
+                    {rec.minutes}
+                    {t("historyMinutesUnit", language)}
+                  </p>
+
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: "13px",
+                      color: "#333",
+                    }}
+                  >
+                    {rec.count}
+                    {t("historyTimesUnit", language)}
+                  </p>
+                </div>
+
+                {/* 3行目：日付 */}
+                <p
+                  style={{
+                    margin: "0 0 6px 0",
+                    fontSize: "12px",
+                    color: "#888",
+                  }}
+                >
+                  {formatDateLocalized(rec.date, language)}
+                </p>
+
+                {/* 4行目：メモ */}
+                {rec.memo && (
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: "12px",
+                      color: "#444",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {rec.memo}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 下部スペース */}
+      <div style={{ height: "40px" }}></div>
+    </main>
+  );
+}

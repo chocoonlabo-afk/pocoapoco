@@ -1,0 +1,524 @@
+📘 DEVELOPMENT\_RULES.md
+
+
+
+pocoapoco／次回アプリ開発用：完全ルール集
+
+
+
+\# 1. プロジェクト全体方針
+
+
+
+重複を減らし、ファイル肥大化を防ぐ
+
+
+
+キー名・URL・参照先の揺れをなくす
+
+
+
+CSV／i18n／localStorage の仕様を明確化
+
+
+
+テストデータをいつでも復元できるように
+
+
+
+ChatGPTとのやり取りを“安全化”し、勝手なキー増殖を防ぐ
+
+
+
+\# 2. 画面構成・フォルダ構造
+
+/app
+
+&nbsp; /homes
+
+&nbsp;   page.js
+
+&nbsp;   components/
+
+&nbsp;   hooks/
+
+&nbsp;   types.ts
+
+&nbsp; /record
+
+&nbsp; /history
+
+&nbsp; /calendar
+
+&nbsp; ...
+
+/components (共通UI)
+
+&nbsp; Card.js
+
+&nbsp; PrimaryButton.js
+
+&nbsp; SectionTitle.js
+
+
+
+/config
+
+&nbsp; routes.ts
+
+&nbsp; storageKeys.ts
+
+&nbsp; appConstants.ts
+
+&nbsp; csvHeaders.js
+
+
+
+/lib
+
+&nbsp; i18n.js
+
+&nbsp; csvUtils.js
+
+&nbsp; devSeeds.js
+
+
+
+\# 3. 共通 UI・スタイルルール
+
+◆ layout + globals.css で一括管理
+
+
+
+フォント、背景色、全ページの余白は globals.css で一元管理
+
+
+
+各 page.js に style を書かない
+
+
+
+layout.js は全体ラッパに徹する
+
+
+
+globals.css 例
+
+:root {
+
+&nbsp; --pap-font: system-ui, -apple-system, sans-serif;
+
+&nbsp; --pap-bg: #f6f0ff;
+
+&nbsp; --pap-card-radius: 12px;
+
+}
+
+
+
+body {
+
+&nbsp; margin: 0;
+
+&nbsp; font-family: var(--pap-font);
+
+&nbsp; background: var(--pap-bg);
+
+}
+
+
+
+◆ 共通UIコンポーネント
+
+
+
+Card
+
+
+
+PrimaryButton
+
+
+
+SectionTitle
+
+
+
+EmptyState
+
+→ 見た目の変更は css 一箇所で完結させる
+
+
+
+\# 4. キー・参照先・ルーティングのルール
+
+◆ localStorageキーは storageKeys.ts に記述
+
+export const STORAGE\_KEYS = {
+
+&nbsp; children: 'pocopoco\_children',
+
+&nbsp; songs: 'pocopoco\_songs',
+
+&nbsp; history: 'pocopoco\_history',
+
+&nbsp; tasks: 'pocopoco\_tasks',
+
+};
+
+
+
+
+
+画面側で文字列を書かない
+
+
+
+必ず STORAGE\_KEYS.children のように参照すること
+
+
+
+◆ URLルーティングは routes.ts にまとめる
+
+export const ROUTES = {
+
+&nbsp; home: '/pocoapoco/homes',
+
+&nbsp; record: '/pocoapoco/record',
+
+&nbsp; history: '/pocoapoco/history',
+
+};
+
+
+
+\# 5. i18n（言語系）ルール
+
+◆ i18nキーの命名形式
+
+screen.home.title
+
+screen.record.startButton
+
+calendar.badge.silver
+
+
+
+◆ 文言の追加は必ず i18n ファイルで行う
+
+
+
+JSX 内で "ホーム" のような直接書きは禁止
+
+
+
+i18n.t('screen.home.title') の形式で呼び出す
+
+
+
+\# 6. CSV入出力ルール（超重要）
+
+◆ 文字コード
+
+
+
+UTF-8（BOM付き）
+
+
+
+改行コードは CRLF (\\r\\n)
+
+→ Excelの文字化け防止
+
+
+
+◆ ヘッダーチェック
+
+
+
+csvHeaders.js に 正しいヘッダー配列を固定化する
+
+
+
+読み込んだCSVの1行目と 完全一致しなければ拒否
+
+
+
+◆ インポート挙動
+
+
+
+差分追加は禁止
+
+
+
+正しい形式なら既存データを完全上書き
+
+
+
+間違ったヘッダーの場合は警告を出して中断
+
+
+
+\# 7. テストデータ（開発効率のための仕組み）
+
+◆ devSeeds.js にテストデータを定義
+
+
+
+例：
+
+
+
+export const devSeeds = {
+
+&nbsp; pocopoco\_children: \[...],
+
+&nbsp; pocopoco\_songs: \[...],
+
+&nbsp; pocopoco\_history: \[...],
+
+};
+
+
+
+◆ 設定画面に「テストデータ投入」ボタンを追加
+
+
+
+ワンクリックで localStorage に seed を入れる
+
+
+
+◆ JSONエクスポート・インポート機能を作る
+
+
+
+現在のアプリ状態を JSON で保存
+
+
+
+ペーストで復元できるようにする
+
+
+
+◆ URLパラメータで seed 注入
+
+http://localhost:3000/?seed=1
+
+
+
+
+
+で自動投入可（開発環境のみ）
+
+
+
+◆ Supabase導入後
+
+
+
+テスト専用ユーザー（固定ID）を1つ作っておく
+
+→ 毎回データを作り直す必要なし
+
+
+
+\# 8. チャットGPTとの開発ルール
+
+◆ 各スレッド冒頭で貼るテンプレ
+
+【変更してはいけないもの】
+
+\- localStorageキー（storageKeys.ts）
+
+\- 画面遷移URL（routes.ts）
+
+\- i18nキー命名ルール
+
+
+
+【新しいキーやURLを使う場合】
+
+\- 必ず config ファイルも同時に更新するコードを出してください
+
+
+
+◆ ChatGPTに勝手なキーを作らせない
+
+
+
+全キーは config に集める
+
+
+
+「文字列リテラル禁止」を徹底
+
+
+
+◆ 画面ごとにスレッドを分ける
+
+
+
+ホーム
+
+
+
+記録
+
+
+
+履歴
+
+
+
+カレンダー
+
+
+
+設定
+
+→ ファイル混線・参照地獄が大幅に減る
+
+
+
+\# 9. 開発前チェックリスト（次回用テンプレ）
+
+✔ 最初に作っておくもの
+
+
+
+&nbsp;layout.js
+
+
+
+&nbsp;globals.css
+
+
+
+&nbsp;Card／PrimaryButton／SectionTitle コンポーネント
+
+
+
+&nbsp;routes.ts
+
+
+
+&nbsp;storageKeys.ts
+
+
+
+&nbsp;appConstants.ts（人数上限・バッジ閾値など）
+
+
+
+&nbsp;csvHeaders.js
+
+
+
+&nbsp;csvUtils.js
+
+
+
+&nbsp;devSeeds.js
+
+
+
+&nbsp;types.ts（Child, Song, HistoryRecode など）
+
+
+
+&nbsp;i18n命名ルール
+
+
+
+&nbsp;ESLint／Prettier
+
+
+
+&nbsp;ChatGPT用「プロジェクトルールテンプレ」
+
+
+
+\# 10. リリース前後の判断基準
+
+◆ リリース前にやるもの
+
+
+
+参照先・キー名の統一
+
+
+
+画面の挙動が崩れないこと
+
+
+
+致命的なバグの修正
+
+
+
+言語の最低限の整合性
+
+
+
+Supabase構築
+
+
+
+Stripe再申請
+
+
+
+◆ リリース後に回せるもの
+
+
+
+フォント／背景色の集約
+
+
+
+共通コンポーネント綺麗化
+
+
+
+i18nの整理
+
+
+
+デザイン微調整
+
+→（Ver1.1で実施）
+
+
+
+\# 11. バグ防止ルール
+
+
+
+page.js に style を直書きしない
+
+
+
+文字列キーを直書きしない
+
+
+
+config にないキーは作らない
+
+
+
+開発時は seed 注入で常に同じ状態でテスト
+
+
+
+CSVは仕様に沿ったヘッダーのみ受け付ける
+
+
+
+PR前に linter を必ず通す
+
+
+
+ロジックは hooks に分ける（肥大化防止）
+

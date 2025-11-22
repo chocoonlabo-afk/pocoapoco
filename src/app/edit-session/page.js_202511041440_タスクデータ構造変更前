@@ -1,0 +1,465 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+
+/**
+ * /edit-session?i=3
+ * i = pocopoco_history の配列index
+ *
+ * 親ロック:
+ *   - localStorage.pocopoco_parentCode があればそれを使う
+ *   - なければ "1234" を仮のデフォルトとして使う
+ */
+
+export default function EditSessionPage() {
+  const searchParams = useSearchParams();
+  const indexStr = searchParams.get("i");
+  const index = indexStr ? parseInt(indexStr, 10) : null;
+
+  // 編集対象のフィールド
+  const [task, setTask] = useState("");
+  const [minutes, setMinutes] = useState(""); // 分
+  const [count, setCount] = useState("");
+  const [memo, setMemo] = useState("");
+  const [startedAt, setStartedAt] = useState("");
+
+  // 親コードの入力欄
+  const [adminCodeInput, setAdminCodeInput] = useState("");
+
+  // 実際にチェックすべき親コード（設定画面からロード）
+  const [requiredCode, setRequiredCode] = useState("1234");
+
+  const [loaded, setLoaded] = useState(false);
+
+  // データ読み込み
+  useEffect(() => {
+    // 1) 親コードを読み込む
+    try {
+      const stored = window.localStorage.getItem("pocopoco_parentCode");
+      if (stored && /^[0-9]{4}$/.test(stored)) {
+        setRequiredCode(stored);
+      } else {
+        setRequiredCode("1234"); // fallback
+      }
+    } catch (e) {
+      console.error("parentCode load error", e);
+      setRequiredCode("1234");
+    }
+
+    // 2) 該当セッションを読み込む
+    if (index === null || isNaN(index)) {
+      setLoaded(true);
+      return;
+    }
+    const raw = window.localStorage.getItem("pocopoco_history");
+    if (!raw) {
+      setLoaded(true);
+      return;
+    }
+
+    try {
+      const arr = JSON.parse(raw);
+      const rec = arr[index];
+      if (!rec) {
+        setLoaded(true);
+        return;
+      }
+
+      setTask(rec.task || "");
+      setMinutes(String(Math.floor((rec.seconds || 0) / 60)));
+      setCount(String(rec.count ?? 0));
+      setMemo(rec.memo || "");
+      setStartedAt(rec.startedAt || "");
+    } catch (e) {
+      console.error("edit load error", e);
+    } finally {
+      setLoaded(true);
+    }
+  }, [index]);
+
+  // 保存
+  function handleSave() {
+    if (adminCodeInput !== requiredCode) {
+      alert("ひみつコードがちがいます。");
+      return;
+    }
+
+    const raw = window.localStorage.getItem("pocopoco_history");
+    if (!raw) {
+      alert("元データが見つかりません。");
+      return;
+    }
+
+    let arr;
+    try {
+      arr = JSON.parse(raw);
+    } catch (e) {
+      alert("データの読み込みに失敗しました。");
+      return;
+    }
+
+    if (index == null || isNaN(index) || !arr[index]) {
+      alert("この記録は見つかりませんでした。");
+      return;
+    }
+
+    const minsNum = parseInt(minutes || "0", 10);
+    const secs = minsNum * 60;
+    const countNum = parseInt(count || "0", 10);
+
+    arr[index] = {
+      ...arr[index],
+      task: task,
+      seconds: secs,
+      count: countNum,
+      memo: memo,
+      startedAt: startedAt || arr[index].startedAt,
+    };
+
+    window.localStorage.setItem(
+      "pocopoco_history",
+      JSON.stringify(arr)
+    );
+
+    alert("更新しました。");
+    window.location.href = "/history";
+  }
+
+  // 削除
+  function handleDelete() {
+    if (adminCodeInput !== requiredCode) {
+      alert("ひみつコードがちがいます。");
+      return;
+    }
+
+    const raw = window.localStorage.getItem("pocopoco_history");
+    if (!raw) {
+      alert("元データが見つかりません。");
+      return;
+    }
+
+    let arr;
+    try {
+      arr = JSON.parse(raw);
+    } catch (e) {
+      alert("データの読み込みに失敗しました。");
+      return;
+    }
+
+    if (index == null || isNaN(index) || !arr[index]) {
+      alert("この記録は見つかりませんでした。");
+      return;
+    }
+
+    arr.splice(index, 1);
+
+    window.localStorage.setItem(
+      "pocopoco_history",
+      JSON.stringify(arr)
+    );
+
+    alert("この記録を削除しました。");
+    window.location.href = "/history";
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      <h1
+        style={{
+          fontSize: "20px",
+          fontWeight: "600",
+          marginBottom: "4px",
+        }}
+      >
+        記録の編集
+      </h1>
+      <div
+        style={{
+          fontSize: "12px",
+          color: "#666",
+          marginBottom: "16px",
+          lineHeight: 1.5,
+        }}
+      >
+        おうちのひと が つかう ページです。
+        {"\n"}
+        こどもは さわらないでね。
+      </div>
+
+      {!loaded && (
+        <p style={{ fontSize: "14px", color: "#666" }}>読み込み中…</p>
+      )}
+
+      {loaded && (index === null || isNaN(index)) && (
+        <p style={{ fontSize: "14px", color: "#c00" }}>
+          記録がみつかりません。（URLに ?i=数字 が必要です）
+        </p>
+      )}
+
+      {loaded && index !== null && !isNaN(index) && (
+        <>
+          {/* タスク名 */}
+          <section
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: "10px",
+              padding: "12px",
+              marginBottom: "12px",
+              backgroundColor: "#fff",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+            }}
+          >
+            <label
+              style={{
+                display: "block",
+                fontSize: "14px",
+                fontWeight: "600",
+                marginBottom: "4px",
+              }}
+            >
+              タスク名（例：バイオリン）
+            </label>
+            <input
+              value={task}
+              onChange={(e) => setTask(e.target.value)}
+              style={{
+                width: "100%",
+                border: "1px solid #bbb",
+                borderRadius: "8px",
+                fontSize: "14px",
+                padding: "8px 10px",
+              }}
+            />
+          </section>
+
+          {/* 時間（分） */}
+          <section
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: "10px",
+              padding: "12px",
+              marginBottom: "12px",
+              backgroundColor: "#fff",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+            }}
+          >
+            <label
+              style={{
+                display: "block",
+                fontSize: "14px",
+                fontWeight: "600",
+                marginBottom: "4px",
+              }}
+            >
+              時間（分）
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value)}
+              style={{
+                width: "100%",
+                border: "1px solid #bbb",
+                borderRadius: "8px",
+                fontSize: "14px",
+                padding: "8px 10px",
+              }}
+            />
+          </section>
+
+          {/* 回数 */}
+          <section
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: "10px",
+              padding: "12px",
+              marginBottom: "12px",
+              backgroundColor: "#fff",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+            }}
+          >
+            <label
+              style={{
+                display: "block",
+                fontSize: "14px",
+                fontWeight: "600",
+                marginBottom: "4px",
+              }}
+            >
+              回数
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={count}
+              onChange={(e) => setCount(e.target.value)}
+              style={{
+                width: "100%",
+                border: "1px solid #bbb",
+                borderRadius: "8px",
+                fontSize: "14px",
+                padding: "8px 10px",
+              }}
+            />
+          </section>
+
+          {/* メモ */}
+          <section
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: "10px",
+              padding: "12px",
+              marginBottom: "12px",
+              backgroundColor: "#fff",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+            }}
+          >
+            <label
+              style={{
+                display: "block",
+                fontSize: "14px",
+                fontWeight: "600",
+                marginBottom: "4px",
+              }}
+            >
+              メモ
+            </label>
+            <textarea
+              rows={3}
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              style={{
+                width: "100%",
+                border: "1px solid #bbb",
+                borderRadius: "8px",
+                fontSize: "14px",
+                padding: "8px 10px",
+                lineHeight: 1.4,
+                resize: "vertical",
+                fontFamily: "system-ui, sans-serif",
+              }}
+            />
+          </section>
+
+          {/* 親コードの入力欄 */}
+          <section
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: "10px",
+              padding: "12px",
+              marginBottom: "20px",
+              backgroundColor: "#fff",
+              boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+            }}
+          >
+            <label
+              style={{
+                display: "block",
+                fontSize: "14px",
+                fontWeight: "600",
+                marginBottom: "4px",
+                color: "#c00",
+              }}
+            >
+              おとなの ひみつコード（4けた）
+            </label>
+            <input
+              type="password"
+              value={adminCodeInput}
+              onChange={(e) => setAdminCodeInput(e.target.value)}
+              placeholder="****"
+              style={{
+                width: "100%",
+                border: "1px solid #bbb",
+                borderRadius: "8px",
+                fontSize: "16px",
+                padding: "8px 10px",
+                letterSpacing: "0.2em",
+              }}
+            />
+            <div
+              style={{
+                fontSize: "11px",
+                color: "#999",
+                marginTop: "4px",
+                lineHeight: 1.4,
+              }}
+            >
+              このコードをしっているひとだけ
+              きろくを なおしたり けしたり できます。
+            </div>
+          </section>
+
+          {/* ボタン行 */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "12px",
+              marginBottom: "24px",
+            }}
+          >
+            <button
+              onClick={handleSave}
+              style={{
+                background:
+                  "linear-gradient(90deg, rgb(204,0,255), rgb(255,102,153))",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "15px",
+                fontWeight: "600",
+                padding: "12px",
+                boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+              }}
+            >
+              💾 ほぞん
+            </button>
+
+            <button
+              onClick={handleDelete}
+              style={{
+                backgroundColor: "#aaa",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "15px",
+                fontWeight: "600",
+                padding: "12px",
+              }}
+            >
+              🗑 この記録をけす
+            </button>
+          </div>
+
+          <div style={{ textAlign: "center" }}>
+            <button
+              onClick={() => {
+                window.location.href = "/history";
+              }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#666",
+                fontSize: "14px",
+                textDecoration: "underline",
+                padding: "8px 12px",
+              }}
+            >
+              ← 履歴にもどる
+            </button>
+          </div>
+        </>
+      )}
+    </main>
+  );
+}

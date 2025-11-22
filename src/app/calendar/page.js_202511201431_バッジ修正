@@ -1,0 +1,590 @@
+// src/app/calendar/page.js
+"use client";
+
+import { useEffect, useState } from "react";
+
+// YYYY-MM-DD にする
+function toDayKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// カレンダーセルを作る
+function buildCalendarCells(year, month) {
+  const first = new Date(year, month, 1);
+  const startWeekday = first.getDay();
+  const lastDate = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= lastDate; d++) {
+    cells.push(new Date(year, month, d));
+  }
+  return cells;
+}
+
+// 分数に応じて色を決める
+function getBadge(minutes) {
+  if (minutes >= 60)
+    return {
+      bg: "#ffe7e7",
+      border: "#ff9f9f",
+      text: "#a00000",
+      label: "🥇",
+    };
+  if (minutes >= 30)
+    return {
+      bg: "#fff4d9",
+      border: "#ffcd73",
+      text: "#6d4c00",
+      label: "🥈",
+    };
+  if (minutes >= 15)
+    return {
+      bg: "#e9ffe9",
+      border: "#a8e4a8",
+      text: "#045704",
+      label: "🥉",
+    };
+  if (minutes > 0)
+    return {
+      bg: "#eef4ff",
+      border: "#aac0ff",
+      text: "#001a66",
+      label: "⭐",
+    };
+  return {
+    bg: "#fff",
+    border: "#ddd",
+    text: "#999",
+    label: "",
+  };
+}
+
+// 複数イベントを読む（旧キーも吸い込む）
+function loadEvents() {
+  // 新
+  try {
+    const raw = localStorage.getItem("pocopoco_events");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr.filter((ev) => ev.date);
+    }
+  } catch {}
+  // 旧
+  try {
+    const raw1 = localStorage.getItem("pocopoco_event");
+    if (raw1) {
+      const ev = JSON.parse(raw1);
+      if (ev?.date) {
+        return [
+          {
+            id: "legacy",
+            title: ev.title || "イベント",
+            date: ev.date,
+            mark: ev.mark || "EV",
+            child_id: "all",
+          },
+        ];
+      }
+    }
+  } catch {}
+  return [];
+}
+
+// カレンダーに反映するタスクIDの配列
+function loadCalendarTaskFilter() {
+  try {
+    const raw = localStorage.getItem("pocopoco_calendar_task_filter");
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null;
+  }
+}
+
+// タスク一覧を読む（名前からid推測用）
+function loadTasksDict() {
+  try {
+    const raw = localStorage.getItem("pocopoco_tasks");
+    if (!raw) return { byId: {}, byLabel: {} };
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return { byId: {}, byLabel: {} };
+    const byId = {};
+    const byLabel = {};
+    arr.forEach((t) => {
+      if (t.id) byId[t.id] = t;
+      if (t.label) byLabel[t.label.trim().toLowerCase()] = t;
+    });
+    return { byId, byLabel };
+  } catch {
+    return { byId: {}, byLabel: {} };
+  }
+}
+
+// 誕生日
+function loadBirthday() {
+  return localStorage.getItem("pocopoco_birthday") || "";
+}
+function isBirthdayDay(date, birthdayStr) {
+  if (!birthdayStr) return false;
+  const [, m, d] = birthdayStr.split("-");
+  if (!m || !d) return false;
+  return date.getMonth() + 1 === Number(m) && date.getDate() === Number(d);
+}
+
+// 履歴から日ごとの合計を作る（タスク＆子どもで絞る）
+function buildDailyMinutesFromHistory(
+  historyArr,
+  filterIds,
+  tasksById,
+  tasksByLabel,
+  targetChildId
+) {
+  const map = {};
+  const hasFilter = Array.isArray(filterIds) && filterIds.length > 0;
+  const hasChildFilter = targetChildId && targetChildId !== "all";
+
+  for (const rec of historyArr) {
+    if (!rec.startedAt) continue;
+
+    // 子どもで絞る
+    if (hasChildFilter) {
+      if ((rec.child_id || "") !== targetChildId) continue;
+    }
+
+    const dayKey = toDayKey(new Date(rec.startedAt));
+    const sec = rec.seconds || 0;
+
+    // タスクフィルタなし
+    if (!hasFilter) {
+      map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+      continue;
+    }
+
+    // task_id で一致
+    if (rec.task_id && filterIds.includes(rec.task_id)) {
+      map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+      continue;
+    }
+
+    // task_title からidを推測
+    if (rec.task_title) {
+      const lc = rec.task_title.trim().toLowerCase();
+      const t = tasksByLabel[lc];
+      if (t && filterIds.includes(t.id)) {
+        map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+        continue;
+      }
+    }
+
+    // 古い形式 task からidを推測
+    if (rec.task) {
+      const lc = rec.task.trim().toLowerCase();
+      const t = tasksByLabel[lc];
+      if (t && filterIds.includes(t.id)) {
+        map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+        continue;
+      }
+    }
+  }
+
+  return map;
+}
+
+export default function CalendarPage() {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [month, setMonth] = useState(() => new Date().getMonth());
+  const [dailyMinutes, setDailyMinutes] = useState({});
+  const [events, setEvents] = useState([]);
+  const [birthday, setBirthday] = useState("");
+  const [calendarTaskFilter, setCalendarTaskFilter] = useState(null);
+  const [tasksDict, setTasksDict] = useState({ byId: {}, byLabel: {} });
+  const [children, setChildren] = useState([]);
+  const [selectedChildId, setSelectedChildId] = useState("all");
+  const [history, setHistory] = useState([]);
+
+  useEffect(() => {
+    // イベント・タスク・誕生日
+    const evs = loadEvents();
+    setEvents(evs);
+
+    const filter = loadCalendarTaskFilter();
+    setCalendarTaskFilter(filter);
+
+    const dict = loadTasksDict();
+    setTasksDict(dict);
+
+    setBirthday(loadBirthday());
+
+    // 子ども
+    const rawChildren = localStorage.getItem("pocopoco_children");
+    if (rawChildren) {
+      try {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) setChildren(arr);
+      } catch {}
+    }
+    const savedChild = localStorage.getItem("pocopoco_current_child_id");
+    if (savedChild) setSelectedChildId(savedChild);
+
+    // 履歴
+    const rawHistory = localStorage.getItem("pocopoco_history");
+    if (rawHistory) {
+      try {
+        const arr = JSON.parse(rawHistory);
+        if (Array.isArray(arr)) {
+          setHistory(arr);
+          const mins = buildDailyMinutesFromHistory(
+            arr,
+            filter,
+            dict.byId,
+            dict.byLabel,
+            savedChild || "all"
+          );
+          setDailyMinutes(mins);
+        }
+      } catch (e) {
+        console.warn("calendar history load error", e);
+      }
+    }
+  }, []);
+
+  // 子どもが変わったり、タスクフィルタが変わったら再集計
+  useEffect(() => {
+    if (!Array.isArray(history)) return;
+    const mins = buildDailyMinutesFromHistory(
+      history,
+      calendarTaskFilter,
+      tasksDict.byId,
+      tasksDict.byLabel,
+      selectedChildId
+    );
+    setDailyMinutes(mins);
+  }, [history, calendarTaskFilter, tasksDict, selectedChildId]);
+
+  const todayKey = toDayKey(new Date());
+  const cells = buildCalendarCells(year, month);
+  const monthStr = `${year}-${String(month + 1).padStart(2, "0")}`;
+
+  // この月のイベント（選択中の子に見えるものだけ）
+  const eventsThisMonth = events.filter((ev) => {
+    if (!ev.date || !ev.date.startsWith(monthStr)) return false;
+    return isEventVisibleForChild(ev, selectedChildId);
+  });
+
+  function goPrevMonth() {
+    const d = new Date(year, month, 1);
+    d.setMonth(d.getMonth() - 1);
+    setYear(d.getFullYear());
+    setMonth(d.getMonth());
+  }
+
+  function goNextMonth() {
+    const d = new Date(year, month, 1);
+    d.setMonth(d.getMonth() + 1);
+    setYear(d.getFullYear());
+    setMonth(d.getMonth());
+  }
+
+  // その日のイベント（子どもで絞る）
+  function getEventsForDay(dayKey) {
+    return events.filter(
+      (ev) => ev.date === dayKey && isEventVisibleForChild(ev, selectedChildId)
+    );
+  }
+
+  return (
+    <main
+      style={{
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "12px",
+        }}
+      >
+        <button onClick={goPrevMonth} style={navBtnStyle}>
+          ←
+        </button>
+        <div style={{ textAlign: "center" }}>
+          <div
+            style={{ fontSize: "18px", fontWeight: "600", color: "#4a148c" }}
+          >
+            {year}年 {month + 1}月
+          </div>
+          <div style={{ fontSize: "11px", color: "#777" }}>
+            カレンダーに反映するタスクだけ合計します
+          </div>
+        </div>
+        <button onClick={goNextMonth} style={navBtnStyle}>
+          →
+        </button>
+      </header>
+
+      {/* 子ども切替 */}
+      {children.length > 0 && (
+        <div
+          style={{
+            marginBottom: "12px",
+            display: "flex",
+            gap: "6px",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            onClick={() => setSelectedChildId("all")}
+            style={{
+              border:
+                selectedChildId === "all"
+                  ? "1px solid #6a1b9a"
+                  : "1px solid #ccc",
+              background: "#fff",
+              borderRadius: "999px",
+              padding: "4px 10px",
+              fontSize: "12px",
+            }}
+          >
+            ぜんいん
+          </button>
+          {children.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setSelectedChildId(c.id)}
+              style={{
+                border:
+                  selectedChildId === c.id
+                    ? "1px solid #6a1b9a"
+                    : "1px solid #ccc",
+                background: "#fff",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "12px",
+              }}
+            >
+              {c.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 今月のイベント */}
+      {eventsThisMonth.length > 0 && (
+        <div
+          style={{
+            border: "1px solid #ffe0a1",
+            background:
+              "linear-gradient(135deg, rgba(255,251,235,0.95), rgba(255,245,200,0.8))",
+            borderRadius: "10px",
+            padding: "10px 12px",
+            marginBottom: "12px",
+          }}
+        >
+          <div
+            style={{ fontSize: "13px", color: "#a15a00", marginBottom: "6px" }}
+          >
+            📣 今月のイベント
+          </div>
+          {eventsThisMonth.map((ev) => (
+            <div
+              key={ev.id || ev.date}
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
+            >
+              <div style={{ fontSize: "16px" }}>{ev.mark || "📌"}</div>
+              <div>
+                <div style={{ fontSize: "14px", fontWeight: "600" }}>
+                  {ev.title || "(タイトルなし)"}
+                </div>
+                <div style={{ fontSize: "12px", color: "#6d4c00" }}>
+                  {ev.date}
+                  {ev.child_id && ev.child_id !== "all"
+                    ? " / この子だけ"
+                    : ""}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 曜日ヘッダー */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          textAlign: "center",
+          marginBottom: "6px",
+          fontSize: "12px",
+          fontWeight: "600",
+          color: "#555",
+        }}
+      >
+        {["日", "月", "火", "水", "木", "金", "土"].map((w) => (
+          <div key={w}>{w}</div>
+        ))}
+      </div>
+
+      {/* 本体 */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          gap: "6px",
+        }}
+      >
+        {cells.map((c, idx) => {
+          if (c === null) {
+            return <div key={idx} style={{ minHeight: "70px" }} />;
+          }
+          const dayKey = toDayKey(c);
+          const minutes = dailyMinutes[dayKey] || 0;
+          const badge = getBadge(minutes);
+          const isToday = dayKey === todayKey;
+          const dayEvents = getEventsForDay(dayKey);
+          const isBday = isBirthdayDay(c, birthday);
+
+          return (
+            <div
+              key={idx}
+              style={{
+                minHeight: "70px",
+                borderRadius: "10px",
+                border: `1px solid ${badge.border}`,
+                backgroundColor: badge.bg,
+                padding: "4px 4px 6px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "2px",
+                boxShadow: isToday
+                  ? "0 0 0 2px rgba(106,27,154,0.35)"
+                  : "none",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "4px",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    color: isToday ? "#6a1b9a" : "#333",
+                  }}
+                >
+                  {c.getDate()}
+                </span>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "2px",
+                    flexWrap: "wrap",
+                    justifyContent: "flex-end",
+                  }}
+                >
+                  {dayEvents.map((ev) => (
+                    <span
+                      key={ev.id || ev.title}
+                      title={ev.title}
+                      style={{
+                        fontSize: "11px",
+                        backgroundColor: "#ff9800",
+                        color: "#fff",
+                        borderRadius: "999px",
+                        padding: "1px 5px",
+                      }}
+                    >
+                      {ev.mark || "EV"}
+                    </span>
+                  ))}
+                  {isBday && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        backgroundColor: "#ff80ab",
+                        color: "#fff",
+                        borderRadius: "999px",
+                        padding: "1px 5px",
+                      }}
+                    >
+                      🎂
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div
+                style={{
+                  marginTop: "auto",
+                  textAlign: "right",
+                  fontSize: "11px",
+                  color: badge.text,
+                }}
+              >
+                {minutes > 0 ? `${minutes}分 ${badge.label}` : "・"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div
+        style={{
+          fontSize: "11px",
+          textAlign: "center",
+          color: "#777",
+          marginTop: "14px",
+          lineHeight: 1.5,
+        }}
+      >
+        ※ 設定で「カレンダーに反映するタスク」をえらぶと、ここで合計されます。<br />
+        ※ 上のボタンで子どもを切り替えると、その子向けのイベントと合計だけ表示します。
+      </div>
+
+      <div style={{ textAlign: "center", marginTop: "18px" }}>
+        <button
+          onClick={() => (window.location.href = "/")}
+          style={{
+            backgroundColor: "#6a1b9a",
+            color: "#fff",
+            border: "none",
+            borderRadius: "8px",
+            padding: "8px 18px",
+            fontWeight: "600",
+          }}
+        >
+          ホームにもどる
+        </button>
+      </div>
+    </main>
+  );
+}
+
+// 子どもIDに見えるイベントかどうか
+function isEventVisibleForChild(ev, childId) {
+  // イベントに子指定がない or "all" → 全員に見える
+  if (!ev.child_id || ev.child_id === "all") return true;
+  // 子どもを選んでない（all表示）→全員向けだけ
+  if (childId === "all") return ev.child_id === "all";
+  // 子どもが一致している時だけ
+  return ev.child_id === childId;
+}
+
+const navBtnStyle = {
+  border: "1px solid #ccc",
+  background: "#fff",
+  borderRadius: "8px",
+  padding: "6px 10px",
+  fontSize: "14px",
+  minWidth: "44px",
+};

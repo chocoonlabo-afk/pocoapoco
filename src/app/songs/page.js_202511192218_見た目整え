@@ -1,0 +1,380 @@
+// src/app/songs/page.js
+"use client";
+
+import { useState } from "react";
+
+// 子ども（ダミーデータ）
+// 実アプリでは既存の子ども一覧から取得する想定
+const initialChildren = [
+  { id: "child1", name: "子どもA" },
+  { id: "child2", name: "子どもB" },
+  { id: "child3", name: "子どもC" },
+];
+
+// CSV書き出し用の簡易エスケープ
+const escapeCSV = (value) => {
+  const v = value ?? "";
+  return `"${v.replace(/"/g, '""')}"`;
+};
+
+// 1行分のCSVをパース（カンマ＆ダブルクォート対応の簡易版）
+const parseCSVLine = (line) => {
+  const result = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+
+    if (char === '"') {
+      const nextChar = line[i + 1];
+      if (inQuotes && nextChar === '"') {
+        // 連続した "" はエスケープされた "
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === "," && !inQuotes) {
+      result.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+
+  return result.map((v) => v.trim());
+};
+
+export default function SongListPage() {
+  const [children] = useState(initialChildren);
+  const [selectedChildId, setSelectedChildId] = useState("child1");
+
+  // 子どもごとの曲リスト: { [childId]: Song[] }
+  const [songsByChild, setSongsByChild] = useState({});
+
+  const currentSongs = songsByChild[selectedChildId] ?? [];
+
+  // 入力フォーム用
+  const [title, setTitle] = useState("");
+  const [composer, setComposer] = useState("");
+  const [performanceDate, setPerformanceDate] = useState("");
+  const [venue, setVenue] = useState("");
+  const [memo, setMemo] = useState("");
+
+  // 曲追加
+  const handleAddSong = (e) => {
+    e.preventDefault();
+
+    if (!selectedChildId) {
+      alert("子どもを選択してください。");
+      return;
+    }
+
+    if (!title.trim()) {
+      alert("曲名を入力してください。");
+      return;
+    }
+
+    const newSong = {
+      id: Date.now(),
+      childId: selectedChildId,
+      title: title.trim(),
+      composer: composer.trim(),
+      performanceDate,
+      venue: venue.trim(),
+      memo: memo.trim(),
+    };
+
+    setSongsByChild((prev) => {
+      const list = prev[selectedChildId] ?? [];
+      return {
+        ...prev,
+        [selectedChildId]: [newSong, ...list],
+      };
+    });
+
+    // 入力フォームをクリア
+    setTitle("");
+    setComposer("");
+    setPerformanceDate("");
+    setVenue("");
+    setMemo("");
+  };
+
+  // CSVエクスポート（選択中の子ども分のみ）
+  const handleExportCSV = () => {
+    if (!selectedChildId) {
+      alert("子どもを選択してください。");
+      return;
+    }
+    if (currentSongs.length === 0) {
+      alert("この子どもの曲リストが空です。");
+      return;
+    }
+
+    const header = ["曲名", "作曲者名", "発表日", "発表場所", "メモ"].join(
+      ","
+    );
+
+    const lines = currentSongs.map((song) => {
+      return [
+        escapeCSV(song.title),
+        escapeCSV(song.composer),
+        escapeCSV(song.performanceDate),
+        escapeCSV(song.venue),
+        escapeCSV(song.memo),
+      ].join(",");
+    });
+
+    const csvContent = [header, ...lines].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    const childName =
+      children.find((c) => c.id === selectedChildId)?.name ?? "unknown";
+
+    a.href = url;
+    a.download = `pocoapoco_songs_${childName}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // CSVインポート（選択中の子どもに追加）
+  const handleImportCSV = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!selectedChildId) {
+      alert("子どもを選択してください。");
+      return;
+    }
+
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
+    if (lines.length <= 1) {
+      alert("有効なデータ行がありません。");
+      e.target.value = "";
+      return;
+    }
+
+    const header = parseCSVLine(lines[0]);
+    if (header.length < 5) {
+      alert("ヘッダー行の形式が想定と異なります。");
+      e.target.value = "";
+      return;
+    }
+
+    const importedSongs = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseCSVLine(lines[i]);
+      if (cols.length < 5) continue;
+
+      const [t, c, d, v, m] = cols;
+
+      if (!t.trim()) continue;
+
+      importedSongs.push({
+        id: Date.now() + i,
+        childId: selectedChildId,
+        title: t.trim(),
+        composer: c.trim(),
+        performanceDate: d.trim(),
+        venue: v.trim(),
+        memo: m.trim(),
+      });
+    }
+
+    if (importedSongs.length === 0) {
+      alert("取り込める曲データがありませんでした。");
+      e.target.value = "";
+      return;
+    }
+
+    setSongsByChild((prev) => {
+      const list = prev[selectedChildId] ?? [];
+      return {
+        ...prev,
+        [selectedChildId]: [...importedSongs, ...list],
+      };
+    });
+
+    e.target.value = "";
+    alert(`曲データを ${importedSongs.length} 件インポートしました。`);
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-8">
+      <h1 className="text-2xl font-bold mb-4">曲名リスト</h1>
+
+      {/* 子ども選択 */}
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <label className="text-sm font-medium">子ども：</label>
+        <select
+          value={selectedChildId}
+          onChange={(e) => setSelectedChildId(e.target.value)}
+          className="border rounded px-3 py-1 text-sm"
+        >
+          {children.map((child) => (
+            <option key={child.id} value={child.id}>
+              {child.name}
+            </option>
+          ))}
+        </select>
+        <span className="text-xs text-gray-500">
+          ※ 実アプリでは、既存の子ども一覧から取得する想定
+        </span>
+      </div>
+
+      {/* CSV入出力 */}
+      <div className="mb-8 flex flex-wrap gap-4 items-center">
+        <button
+          type="button"
+          onClick={handleExportCSV}
+          className="px-4 py-2 text-sm font-semibold border rounded"
+        >
+          CSVエクスポート（この子）
+        </button>
+
+        <label className="text-sm border rounded px-3 py-2 cursor-pointer inline-flex items-center gap-2">
+          <span>CSVインポート（この子に追加）</span>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={handleImportCSV}
+            className="hidden"
+          />
+        </label>
+
+        <span className="text-xs text-gray-500">
+          ※ ヘッダー行：曲名, 作曲者名, 発表日, 発表場所, メモ
+        </span>
+      </div>
+
+      {/* 入力フォーム */}
+      <form
+        onSubmit={handleAddSong}
+        className="space-y-4 mb-8 border p-4 rounded bg-white"
+      >
+        <div>
+          <label className="block text-sm font-medium mb-1">
+            曲名 <span className="text-red-500">*</span>
+          </label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder="例：ヴィヴァルディ 協奏曲 RV.399 第1楽章"
+            required
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">作曲者名</label>
+          <input
+            type="text"
+            value={composer}
+            onChange={(e) => setComposer(e.target.value)}
+            className="w-full border rounded px-3 py-2 text-sm"
+            placeholder="例：ヴィヴァルディ"
+          />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">発表日</label>
+            <input
+              type="date"
+              value={performanceDate}
+              onChange={(e) => setPerformanceDate(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">発表場所</label>
+            <input
+              type="text"
+              value={venue}
+              onChange={(e) => setVenue(e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm"
+              placeholder="例：○○ホール、○○コンクール"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-1">メモ</label>
+          <textarea
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
+            className="w-full border rounded px-3 py-2 text-sm"
+            rows={3}
+            placeholder="例：初めてのコンクール本選、テンポ速めで弾いた など"
+          />
+        </div>
+
+        <div className="text-right">
+          <button
+            type="submit"
+            className="px-4 py-2 text-sm font-semibold border rounded"
+          >
+            リストに追加
+          </button>
+        </div>
+      </form>
+
+      {/* 登録済み曲の一覧 */}
+      <h2 className="text-lg font-semibold mb-2">
+        登録済みの曲（
+        {children.find((c) => c.id === selectedChildId)?.name ?? "選択なし"}
+        ）
+      </h2>
+
+      {currentSongs.length === 0 ? (
+        <p className="text-sm text-gray-500">
+          この子どもの曲がまだ登録されていません。上のフォームから追加してください。
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse bg-white">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="border px-2 py-1 text-left">曲名</th>
+                <th className="border px-2 py-1 text-left">作曲者名</th>
+                <th className="border px-2 py-1 text-left">発表日</th>
+                <th className="border px-2 py-1 text-left">発表場所</th>
+                <th className="border px-2 py-1 text-left">メモ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {currentSongs.map((song) => (
+                <tr key={song.id}>
+                  <td className="border px-2 py-1 align-top">{song.title}</td>
+                  <td className="border px-2 py-1 align-top">
+                    {song.composer}
+                  </td>
+                  <td className="border px-2 py-1 align-top">
+                    {song.performanceDate
+                      ? new Date(song.performanceDate).toLocaleDateString(
+                          "ja-JP"
+                        )
+                      : ""}
+                  </td>
+                  <td className="border px-2 py-1 align-top">{song.venue}</td>
+                  <td className="border px-2 py-1 align-top whitespace-pre-wrap">
+                    {song.memo}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}

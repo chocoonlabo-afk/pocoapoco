@@ -1,0 +1,120 @@
+// シンプルな手作りi18nヘルパー
+// lang は "hiragana" | "jp" | "en"
+
+export function getLangFromStorage() {
+  if (typeof window === "undefined") return "jp"; // SSRガード
+  const saved = window.localStorage.getItem("pocopoco_lang");
+  if (saved === "hiragana" || saved === "jp" || saved === "en") {
+    return saved;
+  }
+  return "jp"; // デフォルトはふつう日本語
+}
+
+// 画面上で使うテキストキーと、その言語ごとの訳
+const DICT = {
+  appTitleChildName: {
+    hiragana: "たろうの れんしゅう",
+    jp: "たろうの 練習",
+    en: "Taro's Practice",
+  },
+  todayLabel: {
+    hiragana: "きょうのれんしゅう",
+    jp: "今日の練習",
+    en: "Today's Practice",
+  },
+  minutesSuffix: {
+    hiragana: "ふん",
+    jp: "分",
+    en: "min",
+  },
+  sessionsCount: {
+    hiragana: "セッション",
+    jp: "セッション",
+    en: "sessions",
+  },
+  limitPerDay: {
+    hiragana: " / 8 まで",
+    jp: " / 8 まで",
+    en: " / 8 max",
+  },
+  badgeBronze: {
+    hiragana: "ぶろんず",
+    jp: "ブロンズ",
+    en: "Bronze",
+  },
+  badgeSilver: {
+    hiragana: "しるばー",
+    jp: "シルバー",
+    en: "Silver",
+  },
+  badgeGold: {
+    hiragana: "ごーるど",
+    jp: "ゴールド",
+    en: "Gold",
+  },
+  nextEventCardTitle: {
+    hiragana: "つぎのイベント",
+    jp: "つぎのイベント",
+    en: "Next Event",
+  },
+  noEventYetTitle: {
+    hiragana: "イベントは まだ ありません",
+    jp: "イベントは まだ ありません",
+    en: "No event yet",
+  },
+  noEventYetHint: {
+    hiragana:
+      "せってい → イベント から はっぴょうかい の ひを いれられます。",
+    jp:
+      "設定 → イベント から 発表会・コンクールの日にちを 入れられます。",
+    en:
+      "Set the recital / competition date in Settings → Event.",
+  },
+  daysLeftSuffix: {
+    hiragana: "にち のこり",
+    jp: "日 まで",
+    en: "days left",
+  },
+  navHome: {
+    hiragana: "ほーむ",
+    jp: "ホーム",
+    en: "Home",
+  },
+  navCalendar: {
+    hiragana: "かれんだー",
+    jp: "カレンダー",
+    en: "Calendar",
+  },
+  navHistory: {
+    hiragana: "りれき",
+    jp: "履歴",
+    en: "History",
+  },
+  navSettings: {
+    hiragana: "せってい",
+    jp: "設定",
+    en: "Settings",
+  },
+  practiceMenuTitle: {
+    hiragana: "れんしゅうめにゅー",
+    jp: "れんしゅうメニュー",
+    en: "Practice Menu",
+  },
+  tapToRecord: {
+    hiragana: "たっぷで きろく",
+    jp: "タップで記録",
+    en: "Tap to record",
+  },
+};
+
+export function t(key, lang) {
+  const bucket = DICT[key];
+  if (!bucket) {
+    // 定義がないキー → とりあえずキー名を返す
+    return key;
+  }
+  if (lang in bucket) {
+    return bucket[lang];
+  }
+  return bucket["jp"] ?? ""; // fallback
+}

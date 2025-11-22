@@ -1,0 +1,386 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+/**
+ * ユーティリティ:
+ * Date -> "YYYY-MM-DD" (日単位のキー用)
+ */
+function dateKeyFromDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * 今表示している月のカレンダーを週ごとに並べる
+ * 返り値: weeks[weekIndex][dayIndex] = Date または null
+ */
+function buildCalendarWeeks(targetDate) {
+  // 対象の月の1日
+  const year = targetDate.getFullYear();
+  const month = targetDate.getMonth(); // 0-11
+  const firstDay = new Date(year, month, 1);
+  const firstWeekday = firstDay.getDay(); // 0=Sun..6=Sat
+
+  // 対象の月の末日
+  const lastDay = new Date(year, month + 1, 0);
+  const lastDateNum = lastDay.getDate();
+
+  // グリッド用のセル列を作る
+  const cells = [];
+
+  // 1日が月曜開始とかズレるぶんをnullで埋める
+  for (let i = 0; i < firstWeekday; i++) {
+    cells.push(null);
+  }
+
+  // 実日付
+  for (let d = 1; d <= lastDateNum; d++) {
+    cells.push(new Date(year, month, d));
+  }
+
+  // 7日ずつで週に分割
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    weeks.push(cells.slice(i, i + 7));
+  }
+  return weeks;
+}
+
+/**
+ * その日の合計練習分からバッジレベルと色を決める
+ * - <15分: "none"
+ * - >=15 && <30: "bronze"
+ * - >=30 && <60: "silver"
+ * - >=60: "gold"
+ */
+function getBadgeInfo(minutes) {
+  if (minutes >= 60) {
+    return {
+      level: "gold",
+      bgColor: "#ffe0e0",
+      borderColor: "#ff8080",
+      textColor: "#a00000",
+    };
+  } else if (minutes >= 30) {
+    return {
+      level: "silver",
+      bgColor: "#fff3cc",
+      borderColor: "#ffd24d",
+      textColor: "#6d4c00",
+    };
+  } else if (minutes >= 15) {
+    return {
+      level: "bronze",
+      bgColor: "#eaffea",
+      borderColor: "#9de09d",
+      textColor: "#064e00",
+    };
+  } else if (minutes > 0) {
+    // 0 < min <15 のときの軽い色
+    return {
+      level: "light",
+      bgColor: "#eef4ff",
+      borderColor: "#aac0ff",
+      textColor: "#001a66",
+    };
+  } else {
+    // 練習なし
+    return {
+      level: "none",
+      bgColor: "#fff",
+      borderColor: "#ddd",
+      textColor: "#999",
+    };
+  }
+}
+
+export default function CalendarPage() {
+  const [currentMonthDate, setCurrentMonthDate] = useState(() => new Date());
+  const [dailySummary, setDailySummary] = useState({}); // { "YYYY-MM-DD": { totalMin, sessions } }
+
+  useEffect(() => {
+    // localStorageに保存されている履歴(pocopoco_history)から、
+    // 日ごとの合計時間とセッション数を計算する
+    try {
+      const raw = window.localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+
+      const all = JSON.parse(raw); // [{task, seconds, count, memo, startedAt}...]
+
+      const summary = {};
+      for (const s of all) {
+        if (!s.startedAt) continue;
+        const d = new Date(s.startedAt);
+        const key = dateKeyFromDate(d);
+
+        const sec = s.seconds || 0;
+        if (!summary[key]) {
+          summary[key] = {
+            totalSec: 0,
+            sessions: 0,
+          };
+        }
+        summary[key].totalSec += sec;
+        summary[key].sessions += 1;
+      }
+
+      // 秒→分
+      const finalSummary = {};
+      for (const key in summary) {
+        finalSummary[key] = {
+          totalMin: Math.floor(summary[key].totalSec / 60),
+          sessions: summary[key].sessions,
+        };
+      }
+
+      setDailySummary(finalSummary);
+    } catch (e) {
+      console.error("カレンダー集計エラー", e);
+    }
+  }, []);
+
+  const todayKey = dateKeyFromDate(new Date());
+  const titleYear = currentMonthDate.getFullYear();
+  const titleMonth = currentMonthDate.getMonth() + 1;
+  const weeks = buildCalendarWeeks(currentMonthDate);
+
+  function goPrevMonth() {
+    setCurrentMonthDate((prev) => {
+      return new Date(prev.getFullYear(), prev.getMonth() - 1, 1);
+    });
+  }
+
+  function goNextMonth() {
+    setCurrentMonthDate((prev) => {
+      return new Date(prev.getFullYear(), prev.getMonth() + 1, 1);
+    });
+  }
+
+  return (
+    <main
+      style={{
+        padding: "24px 16px 80px",
+        fontFamily: "system-ui, sans-serif",
+        maxWidth: "480px",
+        margin: "0 auto",
+        lineHeight: 1.5,
+      }}
+    >
+      {/* ヘッダー */}
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "16px",
+        }}
+      >
+        <button
+          onClick={goPrevMonth}
+          style={{
+            border: "1px solid #ccc",
+            background: "#fff",
+            borderRadius: "8px",
+            padding: "6px 10px",
+            fontSize: "14px",
+            cursor: "pointer",
+            minWidth: "44px",
+          }}
+        >
+          ←
+        </button>
+
+        <div
+          style={{
+            textAlign: "center",
+            lineHeight: 1.3,
+          }}
+        >
+          <div
+            style={{
+              fontSize: "16px",
+              fontWeight: "600",
+            }}
+          >
+            {titleYear}年 {titleMonth}月
+          </div>
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#666",
+            }}
+          >
+            がんばった日に色がつくよ
+          </div>
+        </div>
+
+        <button
+          onClick={goNextMonth}
+          style={{
+            border: "1px solid #ccc",
+            background: "#fff",
+            borderRadius: "8px",
+            padding: "6px 10px",
+            fontSize: "14px",
+            cursor: "pointer",
+            minWidth: "44px",
+          }}
+        >
+          →
+        </button>
+      </header>
+
+      {/* 曜日ヘッダー */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          textAlign: "center",
+          fontSize: "12px",
+          fontWeight: "600",
+          color: "#666",
+          marginBottom: "8px",
+        }}
+      >
+        <div>日</div>
+        <div>月</div>
+        <div>火</div>
+        <div>水</div>
+        <div>木</div>
+        <div>金</div>
+        <div>土</div>
+      </div>
+
+      {/* カレンダー本体 */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: `repeat(${weeks.length}, 1fr)`,
+          rowGap: "8px",
+        }}
+      >
+        {weeks.map((week, wIdx) => (
+          <div
+            key={wIdx}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(7, 1fr)",
+              columnGap: "8px",
+            }}
+          >
+            {week.map((cellDate, cIdx) => {
+              if (!cellDate) {
+                // 前月の穴埋めセル
+                return (
+                  <div
+                    key={cIdx}
+                    style={{
+                      minHeight: "60px",
+                      borderRadius: "8px",
+                      background: "#f4f4f4",
+                      border: "1px solid #ddd",
+                    }}
+                  />
+                );
+              }
+
+              const key = dateKeyFromDate(cellDate);
+              const info = dailySummary[key];
+              const minutes = info ? info.totalMin : 0;
+              const { bgColor, borderColor, textColor, level } =
+                getBadgeInfo(minutes);
+
+              // 今日なら外枠をちょっと強調
+              const isToday = key === todayKey;
+              const outlineStyle = isToday
+                ? "0 0 0 2px rgba(138,43,226,0.6)"
+                : "none";
+
+              return (
+                <div
+                  key={cIdx}
+                  style={{
+                    minHeight: "60px",
+                    borderRadius: "8px",
+                    border: `1px solid ${borderColor}`,
+                    background: bgColor,
+                    fontSize: "12px",
+                    padding: "6px 6px",
+                    lineHeight: 1.4,
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    color: textColor,
+                    boxShadow: outlineStyle,
+                  }}
+                >
+                  {/* 日付 */}
+                  <div
+                    style={{
+                      fontWeight: "600",
+                      textAlign: "left",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {cellDate.getDate()}
+                  </div>
+
+                  {/* バッジ or ドット */}
+                  {minutes > 0 ? (
+                    <div
+                      style={{
+                        textAlign: "right",
+                        fontWeight: "600",
+                        fontSize: "11px",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {minutes}分
+                      {level === "gold"
+                        ? " 🥇"
+                        : level === "silver"
+                        ? " 🥈"
+                        : level === "bronze"
+                        ? " 🥉"
+                        : " ⭐"}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        textAlign: "right",
+                        fontSize: "11px",
+                        color: "#bbb",
+                      }}
+                    >
+                      ・
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* 凡例 */}
+      <div
+        style={{
+          fontSize: "11px",
+          color: "#777",
+          marginTop: "16px",
+          lineHeight: 1.5,
+          textAlign: "center",
+        }}
+      >
+        🥉15分〜 / 🥈30分〜 / 🥇60分〜
+        <br />
+        今日はむらさきの枠で表示されます
+      </div>
+    </main>
+  );
+}

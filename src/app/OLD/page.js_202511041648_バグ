@@ -1,0 +1,651 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { getLangFromStorage, t } from "../lib/i18n";
+
+// ★ A-1時点と同じ初期タスク
+const DEFAULT_TASKS = [
+  { id: "task_violin", label: "バイオリン", icon: "🎻" },
+  { id: "task_piano", label: "ピアノ", icon: "🎹" },
+  { id: "task_solfege", label: "ソルフェージュ", icon: "📝" },
+  { id: "task_japanese", label: "国語", icon: "📖" },
+  { id: "task_math", label: "算数", icon: "🔢" },
+  { id: "task_english", label: "英語", icon: "🇬🇧" },
+  { id: "task_science", label: "理科", icon: "🔬" },
+  { id: "task_social", label: "社会", icon: "🌍" },
+];
+
+// 旧データ（idなし）のときにidをつける
+function normalizeTasks(tasksLike) {
+  if (!Array.isArray(tasksLike)) return [];
+  return tasksLike.map((t, index) => {
+    if (t.id) return t;
+    const base =
+      typeof t.label === "string" && t.label.length > 0
+        ? t.label
+        : `task_${index}`;
+    const normalizedId =
+      "task_" +
+      base
+        .toString()
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^\w_ぁ-んァ-ン一-龥]/g, "") +
+      "_" +
+      index;
+    return {
+      id: normalizedId,
+      label: t.label ?? `タスク${index + 1}`,
+      icon: t.icon ?? "🎵",
+    };
+  });
+}
+
+// 日付キー "YYYY/MM/DD"
+function makeDayKey(d) {
+  return [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, "0"),
+    String(d.getDate()).padStart(2, "0"),
+  ].join("/");
+}
+
+// イベントまでの残り日数
+function calcDaysLeft(dateStr) {
+  const today = new Date();
+  const target = new Date(dateStr + "T00:00:00");
+  const diffMs = target.getTime() - today.getTime();
+  const diffDaysFloat = diffMs / (1000 * 60 * 60 * 24);
+  return Math.ceil(diffDaysFloat);
+}
+
+// 誕生日が今日かどうか
+function checkBirthdayToday(bdayStr) {
+  const [y, m, d] = bdayStr.split("-");
+  if (!m || !d) return false;
+  const mm = parseInt(m, 10);
+  const dd = parseInt(d, 10);
+  const now = new Date();
+  return now.getMonth() + 1 === mm && now.getDate() === dd;
+}
+
+export default function HomePage() {
+  const [lang, setLang] = useState("jp");
+
+  // 今日の集計（選択中の子どもでフィルタ済み）
+  const [todayMinutes, setTodayMinutes] = useState(0);
+  const [todaySessions, setTodaySessions] = useState(0);
+  const [badge, setBadge] = useState("none");
+
+  // イベント（1件だけの、ホーム用）
+  const [nextEventName, setNextEventName] = useState("");
+  const [daysLeft, setDaysLeft] = useState(null);
+
+  // 誕生日
+  const [isBirthdayToday, setIsBirthdayToday] = useState(false);
+
+  // タスク一覧
+  const [tasks, setTasks] = useState(DEFAULT_TASKS);
+
+  // ★ A-6: 子ども一覧と現在選択している子ども
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("");
+
+  useEffect(() => {
+    // 言語
+    const currentLang = getLangFromStorage();
+    setLang(currentLang);
+
+    // 子ども一覧
+    try {
+      const rawChildren = localStorage.getItem("pocopoco_children");
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) {
+          setChildren(arr);
+        }
+      }
+      const savedCurrent = localStorage.getItem("pocopoco_current_child_id");
+      if (savedCurrent) {
+        setCurrentChildId(savedCurrent);
+      }
+    } catch (e) {
+      console.warn("children load error", e);
+    }
+
+    // タスク一覧
+    try {
+      const rawTasks = window.localStorage.getItem("pocopoco_tasks");
+      if (rawTasks) {
+        const parsedTasks = JSON.parse(rawTasks);
+        const normalized = normalizeTasks(parsedTasks);
+        setTasks(normalized);
+        window.localStorage.setItem("pocopoco_tasks", JSON.stringify(normalized));
+      } else {
+        window.localStorage.setItem("pocopoco_tasks", JSON.stringify(DEFAULT_TASKS));
+        setTasks(DEFAULT_TASKS);
+      }
+    } catch (e) {
+      console.error("tasks load error", e);
+      setTasks(DEFAULT_TASKS);
+    }
+
+    // イベント情報（ホーム用1件）
+    try {
+      const rawEvent = window.localStorage.getItem("pocopoco_event");
+      if (rawEvent) {
+        const parsed = JSON.parse(rawEvent);
+        if (parsed && typeof parsed === "object") {
+          if (parsed.title) setNextEventName(parsed.title);
+          if (parsed.date) setDaysLeft(calcDaysLeft(parsed.date));
+        }
+      }
+    } catch (e) {
+      console.error("event load error", e);
+    }
+
+    // 誕生日
+    try {
+      const bdayStr = window.localStorage.getItem("pocopoco_birthday");
+      if (bdayStr && checkBirthdayToday(bdayStr)) {
+        setIsBirthdayToday(true);
+      }
+    } catch (e) {
+      console.error("birthday load error", e);
+    }
+  }, []);
+
+  // 子ども読み込み後に今日の集計をする
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+
+      const all = JSON.parse(raw);
+      const todayKey = makeDayKey(new Date());
+      const filtered = all.filter((s) => {
+        if (!s.startedAt) return false;
+        const d = new Date(s.startedAt);
+        const isToday = makeDayKey(d) === todayKey;
+
+        // 子指定ありなら child_id も見る
+        if (currentChildId && s.child_id && currentChildId !== s.child_id) {
+          return false;
+        }
+        return isToday;
+      });
+
+      const totalSeconds = filtered.reduce((acc, s) => acc + (s.seconds || 0), 0);
+      const mins = Math.floor(totalSeconds / 60);
+
+      setTodayMinutes(mins);
+      setTodaySessions(filtered.length);
+
+      if (mins >= 60) setBadge("gold");
+      else if (mins >= 30) setBadge("silver");
+      else if (mins >= 15) setBadge("bronze");
+      else setBadge("none");
+    } catch (e) {
+      console.error("home today calc error", e);
+    }
+  }, [currentChildId]);
+
+  // 子どもの名前をとる
+  function getCurrentChildName() {
+    if (!currentChildId) return "";
+    const found = children.find((c) => c.id === currentChildId);
+    return found ? found.name : "";
+  }
+
+  // 子どもを切り替える
+  function switchChild(childId) {
+    setCurrentChildId(childId);
+    if (childId) {
+      localStorage.setItem("pocopoco_current_child_id", childId);
+    } else {
+      localStorage.removeItem("pocopoco_current_child_id");
+    }
+    // 切り替え後の今日の集計は useEffect 側が再計算
+  }
+
+  // 記録へ（taskId + task名 + childIdをクエリに載せる）
+  function goRecordByTask(task) {
+    if (!task) return;
+    const params = new URLSearchParams();
+    params.set("taskId", task.id);
+    params.set("task", task.label);
+    if (currentChildId) {
+      params.set("childId", currentChildId);
+    }
+    window.location.href = `/record?${params.toString()}`;
+  }
+
+  function goHistory() {
+    window.location.href = "/history";
+  }
+  function goCalendar() {
+    window.location.href = "/calendar";
+  }
+  function goSettings() {
+    window.location.href = "/settings";
+  }
+
+  function renderBadge() {
+    if (badge === "none") return null;
+    let textKey = "";
+    let bg = "";
+    let color = "#fff";
+
+    if (badge === "bronze") {
+      textKey = "badgeBronze";
+      bg = "linear-gradient(135deg,#d6843a,#b86a2e)";
+    } else if (badge === "silver") {
+      textKey = "badgeSilver";
+      bg = "linear-gradient(135deg,#cfd3d7,#9ea3a8)";
+    } else if (badge === "gold") {
+      textKey = "badgeGold";
+      bg = "linear-gradient(135deg,#ffd95e,#e0a800)";
+    }
+
+    return (
+      <div
+        style={{
+          display: "inline-block",
+          padding: "4px 8px",
+          borderRadius: "999px",
+          fontSize: "12px",
+          fontWeight: 600,
+          color,
+          background: bg,
+          lineHeight: 1.2,
+          boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+          marginTop: "4px",
+        }}
+      >
+        {t(textKey, lang)}
+      </div>
+    );
+  }
+
+  function renderEventCardBody() {
+    const daysOk = daysLeft !== null && !isNaN(daysLeft);
+
+    if (!nextEventName && !daysOk) {
+      return (
+        <>
+          <div
+            style={{
+              fontSize: "13px",
+              fontWeight: "500",
+              color: "#6d4c00",
+              lineHeight: 1.4,
+              marginBottom: "8px",
+            }}
+          >
+            {t("noEventYetTitle", lang)}
+          </div>
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#8b6b00",
+              lineHeight: 1.4,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {t("noEventYetHint", lang)}
+          </div>
+        </>
+      );
+    }
+
+    if (nextEventName && !daysOk) {
+      return (
+        <>
+          <div
+            style={{
+              fontSize: "15px",
+              fontWeight: "600",
+              color: "#6d4c00",
+              lineHeight: 1.4,
+              marginBottom: "8px",
+              wordBreak: "break-word",
+            }}
+          >
+            {nextEventName}
+          </div>
+          <div style={{ fontSize: "12px", color: "#8b6b00" }}>
+            日にちが せっていされていません
+          </div>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <div
+          style={{
+            fontSize: "15px",
+            fontWeight: "600",
+            color: "#6d4c00",
+            lineHeight: 1.4,
+            marginBottom: "8px",
+            wordBreak: "break-word",
+          }}
+        >
+          {nextEventName || "（イベント名）"}
+        </div>
+
+        {daysLeft >= 0 ? (
+          <div
+            style={{
+              fontSize: "13px",
+              color: "#6d4c00",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "6px",
+              alignItems: "baseline",
+            }}
+          >
+            <div style={{ fontSize: "24px", fontWeight: "700" }}>{daysLeft}</div>
+            <div style={{ fontSize: "14px" }}>
+              {lang === "en" ? "" : t("daysLeftSuffix", lang).split(" ")[0]}
+            </div>
+            <div style={{ fontSize: "12px", color: "#8b6b00" }}>
+              {lang === "en"
+                ? t("daysLeftSuffix", lang)
+                : t("daysLeftSuffix", lang).split(" ").slice(1).join(" ")}
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: "12px", color: "#8b6b00" }}>
+            おつかれさま！もう本番はおわったよ🎀
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function renderBirthdayCard() {
+    if (!isBirthdayToday) return null;
+    return (
+      <section
+        style={{
+          border: "2px solid #ffd1e8",
+          background:
+            "linear-gradient(135deg, rgba(255,240,250,0.95), rgba(255,225,240,0.9))",
+          borderRadius: "14px",
+          padding: "16px",
+          marginBottom: "16px",
+          boxShadow: "0 4px 8px rgba(0,0,0,0.08)",
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "16px",
+            fontWeight: "700",
+            color: "#d81b60",
+            marginBottom: "8px",
+          }}
+        >
+          🎂 おたんじょうび おめでとう！
+        </div>
+        <div style={{ fontSize: "13px", color: "#555", lineHeight: 1.4 }}>
+          きょうは とくべつな日！
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      {/* ヘッダー */}
+      <header style={{ marginBottom: "10px" }}>
+        <div style={{ fontSize: "14px", color: "#666", marginBottom: "4px" }}>
+          {t("appTitleChildName", lang)}
+        </div>
+        <div style={{ fontSize: "13px", color: "#999" }}>
+          {new Date().toLocaleDateString(lang === "en" ? "en-US" : "ja-JP", {
+            month: "long",
+            day: "numeric",
+            weekday: "short",
+          })}
+        </div>
+      </header>
+
+      {/* 子ども切替（A-6） */}
+      <section
+        style={{
+          background: "#f5ecff",
+          border: "1px solid #e0ccff",
+          borderRadius: "10px",
+          padding: "10px 12px",
+          marginBottom: "14px",
+        }}
+      >
+        <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>
+          いま表示している こども
+        </div>
+        <div style={{ fontSize: "15px", fontWeight: 600, marginBottom: "6px" }}>
+          {getCurrentChildName() || "（まだえらばれていません）"}
+        </div>
+        {children.length > 1 && (
+          <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+            <button
+              onClick={() => switchChild("")}
+              style={{
+                border: currentChildId === "" ? "1px solid #6a1b9a" : "1px solid #ccc",
+                backgroundColor: "#fff",
+                borderRadius: "999px",
+                padding: "3px 10px",
+                fontSize: "12px",
+              }}
+            >
+              すべて
+            </button>
+            {children.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => switchChild(c.id)}
+                style={{
+                  border:
+                    currentChildId === c.id ? "1px solid #6a1b9a" : "1px solid #ccc",
+                  backgroundColor: "#fff",
+                  borderRadius: "999px",
+                  padding: "3px 10px",
+                  fontSize: "12px",
+                }}
+              >
+                {c.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* 誕生日カード */}
+      {renderBirthdayCard()}
+
+      {/* 上段カード：今日の練習・イベント */}
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "16px",
+          marginBottom: "24px",
+        }}
+      >
+        {/* 今日の練習 */}
+        <div
+          style={{
+            borderRadius: "12px",
+            border: "1px solid #e0ccff",
+            background:
+              "linear-gradient(135deg, rgba(255,240,255,0.9), rgba(245,230,255,0.8))",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+            padding: "16px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "14px",
+              fontWeight: "600",
+              color: "#4a148c",
+              marginBottom: "4px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}
+          >
+            <span>⏰</span>
+            <span>{t("todayLabel", lang)}</span>
+          </div>
+          <div
+            style={{
+              fontSize: "32px",
+              fontWeight: "700",
+              color: "#6a1b9a",
+              lineHeight: 1.2,
+            }}
+          >
+            {todayMinutes}
+          </div>
+          <div style={{ fontSize: "14px", color: "#6a1b9a", marginBottom: "8px" }}>
+            {t("minutesSuffix", lang)}
+          </div>
+          {renderBadge()}
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#555",
+              backgroundColor: "#fff",
+              borderRadius: "8px",
+              border: "1px solid #ddd",
+              padding: "6px 8px",
+              display: "inline-block",
+              marginTop: "8px",
+            }}
+          >
+            {t("sessionsCount", lang)} {todaySessions}
+            {t("limitPerDay", lang)}
+          </div>
+        </div>
+
+        {/* イベント */}
+        <div
+          style={{
+            borderRadius: "12px",
+            border: "1px solid #ffe0a1",
+            background:
+              "linear-gradient(135deg, rgba(255,251,235,0.95), rgba(255,245,200,0.8))",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+            padding: "16px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "14px",
+              fontWeight: "600",
+              color: "#a15a00",
+              marginBottom: "4px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+            }}
+          >
+            <span>⭐</span>
+            <span>{t("nextEventCardTitle", lang)}</span>
+          </div>
+          {renderEventCardBody()}
+        </div>
+      </section>
+
+      {/* タスク一覧 */}
+      <section style={{ marginBottom: "32px" }}>
+        <h2 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "12px" }}>
+          {t("practiceMenuTitle", lang)}
+        </h2>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: "12px",
+          }}
+        >
+          {tasks.map((task) => (
+            <button
+              key={task.id}
+              onClick={() => goRecordByTask(task)}
+              style={{
+                borderRadius: "12px",
+                border: "1px solid #ddd",
+                backgroundColor: "#fff",
+                boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
+                padding: "16px 12px",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ fontSize: "28px", marginBottom: "8px" }}>
+                {task.icon || "🎵"}
+              </div>
+              <div style={{ fontSize: "14px", fontWeight: "600", color: "#333" }}>
+                {task.label || "（なまえ）"}
+              </div>
+              <div style={{ fontSize: "12px", color: "#666", marginTop: "4px" }}>
+                {t("tapToRecord", lang)}
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* フッター */}
+      <nav
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: "8px",
+          borderTop: "1px solid #ddd",
+          paddingTop: "16px",
+          fontSize: "13px",
+          color: "#444",
+        }}
+      >
+        <button
+          onClick={() => (window.location.href = "/")}
+          style={navBtnStyle}
+        >
+          <div style={{ fontSize: "18px" }}>🏠</div>
+          <div>{t("navHome", lang)}</div>
+        </button>
+        <button onClick={goCalendar} style={navBtnStyle}>
+          <div style={{ fontSize: "18px" }}>📅</div>
+          <div>{t("navCalendar", lang)}</div>
+        </button>
+        <button onClick={goHistory} style={navBtnStyle}>
+          <div style={{ fontSize: "18px" }}>📝</div>
+          <div>{t("navHistory", lang)}</div>
+        </button>
+        <button onClick={goSettings} style={navBtnStyle}>
+          <div style={{ fontSize: "18px" }}>⚙️</div>
+          <div>{t("navSettings", lang)}</div>
+        </button>
+      </nav>
+    </main>
+  );
+}
+
+const navBtnStyle = {
+  background: "none",
+  border: "none",
+  textAlign: "center",
+  lineHeight: 1.4,
+  wordBreak: "break-word",
+};

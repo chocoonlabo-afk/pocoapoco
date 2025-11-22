@@ -1,0 +1,211 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export default function HistoryPage() {
+  const [records, setRecords] = useState([]);
+  const [summary, setSummary] = useState({
+    totalMinutes: 0,
+    totalCount: 0,
+    todayCount: 0,
+  });
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
+
+  // localStorage から履歴を読み込み
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return;
+      setRecords(data);
+      setSummary(calculateSummary(data));
+    } catch (e) {
+      console.error("failed to load history", e);
+    }
+  }
+
+  // 合計時間・回数を集計
+  function calculateSummary(records) {
+    const today = new Date().toISOString().slice(0, 10);
+    const todayRecords = records.filter((r) => r.startedAt?.startsWith(today));
+
+    const totalSeconds = todayRecords.reduce(
+      (sum, r) => sum + (r.seconds || 0),
+      0
+    );
+    const totalCount = todayRecords.reduce(
+      (sum, r) => sum + (r.count || 0),
+      0
+    );
+
+    return {
+      totalMinutes: Math.floor(totalSeconds / 60),
+      totalCount,
+      todayCount: todayRecords.length,
+    };
+  }
+
+  // 日付をきれいに表示
+  function formatDate(dateStr) {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleString("ja-JP", {
+        month: "long",
+        day: "numeric",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return dateStr;
+    }
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "500px",
+        margin: "0 auto",
+      }}
+    >
+      <header style={{ marginBottom: "24px" }}>
+        <h2 style={{ fontSize: "20px", marginBottom: "8px", color: "#4a148c" }}>
+          練習のきろく
+        </h2>
+        <p style={{ fontSize: "13px", color: "#777" }}>
+          保存された練習の履歴をひょうじします
+        </p>
+      </header>
+
+      {/* 今日のサマリー */}
+      <section
+        style={{
+          background:
+            "linear-gradient(135deg, rgba(240,230,255,0.9), rgba(230,245,255,0.8))",
+          border: "1px solid #e0ccff",
+          borderRadius: "12px",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+          padding: "16px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3
+          style={{
+            fontSize: "16px",
+            marginBottom: "8px",
+            color: "#6a1b9a",
+          }}
+        >
+          きょうのまとめ
+        </h3>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          合計時間：<strong>{summary.totalMinutes}</strong>分
+        </p>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          合計回数：<strong>{summary.totalCount}</strong>回
+        </p>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          件数：<strong>{summary.todayCount}</strong>件
+        </p>
+      </section>
+
+      {/* 履歴一覧 */}
+      <section>
+        <h3
+          style={{
+            fontSize: "16px",
+            marginBottom: "12px",
+            color: "#6a1b9a",
+          }}
+        >
+          ぜんたいのきろく
+        </h3>
+
+        {records.length === 0 ? (
+          <p style={{ fontSize: "14px", color: "#777" }}>
+            まだきろくがありません。
+          </p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            {[...records]
+              .reverse()
+              .map((r, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    border: "1px solid #ddd",
+                    borderRadius: "10px",
+                    backgroundColor: "#fff",
+                    padding: "12px",
+                    boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "13px",
+                      color: "#999",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    {formatDate(r.startedAt)}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "15px",
+                      fontWeight: "600",
+                      color: "#4a148c",
+                    }}
+                  >
+                    {r.task || "タスク不明"}
+                  </div>
+                  <div style={{ fontSize: "14px", color: "#333" }}>
+                    ⏱ {Math.floor((r.seconds || 0) / 60)}分 ／ 🎯{" "}
+                    {r.count || 0}回
+                  </div>
+                  {r.memo && (
+                    <div
+                      style={{
+                        marginTop: "6px",
+                        fontSize: "13px",
+                        color: "#555",
+                        background: "#fafafa",
+                        borderRadius: "6px",
+                        padding: "6px 8px",
+                      }}
+                    >
+                      📝 {r.memo}
+                    </div>
+                  )}
+                </div>
+              ))}
+          </div>
+        )}
+      </section>
+
+      {/* 戻るボタン */}
+      <div style={{ marginTop: "24px", textAlign: "center" }}>
+        <button
+          onClick={() => (window.location.href = "/")}
+          style={{
+            backgroundColor: "#6a1b9a",
+            color: "#fff",
+            border: "none",
+            borderRadius: "8px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "10px 20px",
+          }}
+        >
+          ホームにもどる
+        </button>
+      </div>
+    </main>
+  );
+}

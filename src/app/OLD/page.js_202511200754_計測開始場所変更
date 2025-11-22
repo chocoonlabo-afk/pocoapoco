@@ -1,0 +1,309 @@
+// src/app/page.js
+"use client";
+
+import { useEffect, useState } from "react";
+import { t, getLangFromStorage } from "./lib/i18n";
+
+// 設定とそろえる初期タスク
+const DEFAULT_TASKS = [
+  { id: "task_violin", label: "バイオリン", icon: "🎻" },
+  { id: "task_piano", label: "ピアノ", icon: "🎹" },
+  { id: "task_solfege", label: "ソルフェージュ", icon: "📝" },
+  { id: "task_japanese", label: "国語", icon: "📖" },
+  { id: "task_math", label: "算数", icon: "🔢" },
+  { id: "task_english", label: "英語", icon: "🇬🇧" },
+];
+
+export default function HomePage() {
+  const [lang, setLang] = useState("jp");
+  const [role, setRole] = useState("parent");
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("");
+  const [tasks, setTasks] = useState(DEFAULT_TASKS);
+  const [eventData, setEventData] = useState(null);
+  const [todayTotalSec, setTodayTotalSec] = useState(0);
+  const [todayTotalCount, setTodayTotalCount] = useState(0);
+
+  useEffect(() => {
+    // 言語
+    const savedLang = getLangFromStorage();
+    setLang(savedLang);
+
+    // 親/子モード
+    const savedRole = localStorage.getItem("pocopoco_role");
+    if (savedRole === "child") setRole("child");
+
+    // 子ども一覧
+    const rawChildren = localStorage.getItem("pocopoco_children");
+    if (rawChildren) {
+      try {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) setChildren(arr);
+      } catch (e) {
+        console.warn("children parse error", e);
+      }
+    }
+
+    // 表示中の子
+    const savedCurrent = localStorage.getItem("pocopoco_current_child_id") || "";
+    if (savedCurrent) {
+      setCurrentChildId(savedCurrent);
+    }
+
+    // タスク
+    const rawTasks = localStorage.getItem("pocopoco_tasks");
+    if (rawTasks) {
+      try {
+        const arr = JSON.parse(rawTasks);
+        if (Array.isArray(arr) && arr.length > 0) {
+          setTasks(arr);
+        }
+      } catch (e) {
+        console.warn("tasks parse error", e);
+      }
+    }
+
+    // イベントの読み込み（新方式）
+    loadHomeEvent(savedCurrent);
+
+    // きょうの合計
+    calcTodayTotals(savedCurrent);
+  }, []);
+
+  // 新方式イベントを読む
+  function loadHomeEvent(childId) {
+    const rawEvents = localStorage.getItem("pocopoco_events");
+    if (rawEvents) {
+      try {
+        const arr = JSON.parse(rawEvents);
+        if (Array.isArray(arr)) {
+          const childKey = childId || "all";
+
+          // 1. その子に対して home: true のものを探す
+          let homeEv =
+            arr.find(
+              (e) =>
+                e.home === true &&
+                (
+                  e.child_id === childKey || // その子用
+                  (childKey === "all" && (!e.child_id || e.child_id === "all")) // 全員用
+                )
+            ) || null;
+
+          // 2. 見つからないときはその子のイベントの先頭
+          if (!homeEv) {
+            homeEv =
+              arr.find(
+                (e) =>
+                  e.child_id === childKey ||
+                  (childKey === "all" && (!e.child_id || e.child_id === "all"))
+              ) || null;
+          }
+
+          // 3. それでも無ければ全員向け or 先頭
+          if (!homeEv && arr.length > 0) {
+            homeEv =
+              arr.find((e) => !e.child_id || e.child_id === "all") || arr[0];
+          }
+
+          if (homeEv) {
+            setEventData({ title: homeEv.title, date: homeEv.date });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("events parse error", e);
+      }
+    }
+
+    // 旧データ互換（pocopoco_event がある場合）
+    const rawOld = localStorage.getItem("pocopoco_event");
+    if (rawOld) {
+      try {
+        const evt = JSON.parse(rawOld);
+        setEventData(evt);
+      } catch (e) {
+        console.warn("old event parse error", e);
+      }
+    }
+  }
+
+  // きょうの合計を計算する関数
+  function calcTodayTotals(childId) {
+    const rawHistory = localStorage.getItem("pocopoco_history");
+    const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    if (!rawHistory) {
+      setTodayTotalSec(0);
+      setTodayTotalCount(0);
+      return;
+    }
+    try {
+      const arr = JSON.parse(rawHistory);
+      if (!Array.isArray(arr)) return;
+      let secSum = 0;
+      let countSum = 0;
+      for (const r of arr) {
+        if (!r.startedAt) continue;
+        const d = r.startedAt.slice(0, 10);
+        if (d !== todayStr) continue;
+        // 子指定がある場合は一致するものだけ
+        if (childId && r.child_id && r.child_id !== childId) continue;
+        secSum += Number(r.seconds || 0);
+        countSum += Number(r.count || 0);
+      }
+      setTodayTotalSec(secSum);
+      setTodayTotalCount(countSum);
+    } catch (e) {
+      console.warn("history parse error", e);
+    }
+  }
+
+  const currentChildName =
+    children.find((c) => c.id === currentChildId)?.name || "";
+
+  const todayMinutes = Math.floor(todayTotalSec / 60);
+  const todaySeconds = todayTotalSec % 60;
+
+  return (
+    <main
+      style={{
+        padding: "20px 16px 80px",
+        maxWidth: "520px",
+        margin: "0 auto",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      {/* タイトルと子ども表示 */}
+      <header style={{ marginBottom: "16px" }}>
+        <h1 style={{ fontSize: "20px", fontWeight: 600, marginBottom: "4px" }}>
+          {t("homeTitle", lang)}
+        </h1>
+        {currentChildName ? (
+          <p style={{ fontSize: "13px", color: "#555" }}>
+            いま表示しているこども： <strong>{currentChildName}</strong>
+          </p>
+        ) : (
+          <p style={{ fontSize: "12px", color: "#999" }}>
+            （こどもが未選択です。設定で選ぶとここに表示されます）
+          </p>
+        )}
+      </header>
+
+      {/* 今日の合計 */}
+      <section
+        style={{
+          background: "#f7f1ff",
+          border: "1px solid #e1d1ff",
+          borderRadius: "14px",
+          padding: "14px 14px 8px",
+          marginBottom: "16px",
+        }}
+      >
+        <div style={{ fontSize: "13px", marginBottom: "6px" }}>
+          {t("todayPractice", lang)}
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: "12px" }}>
+          <div style={{ fontSize: "30px", fontWeight: 700 }}>
+            {todayMinutes}:{todaySeconds.toString().padStart(2, "0")}
+          </div>
+          <div style={{ fontSize: "12px", color: "#666" }}>
+            {t("sessionsCount", lang)}
+            {todayTotalCount}
+          </div>
+        </div>
+      </section>
+
+      {/* イベントカード */}
+      {eventData && eventData.title ? (
+        <section
+          style={{
+            background: "#fff3e0",
+            border: "1px solid #ffe0b2",
+            borderRadius: "14px",
+            padding: "12px 14px",
+            marginBottom: "16px",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "12px",
+              color: "#f57c00",
+              marginBottom: "4px",
+            }}
+          >
+            {t("nextEvent", lang)}
+          </div>
+          <div style={{ fontSize: "14px", fontWeight: 600 }}>
+            {eventData.title}
+          </div>
+          {eventData.date && (
+            <div style={{ fontSize: "12px", marginTop: "4px" }}>
+              {eventData.date}
+            </div>
+          )}
+        </section>
+      ) : (
+        <section
+          style={{
+            background: "#f5f5f5",
+            borderRadius: "14px",
+            padding: "12px 14px",
+            marginBottom: "16px",
+          }}
+        >
+          <div style={{ fontSize: "12px", marginBottom: "4px" }}>
+            {t("noEventYetTitle", lang)}
+          </div>
+          <div style={{ fontSize: "11px", color: "#777" }}>
+            {t("noEventYetHint", lang)}
+          </div>
+        </section>
+      )}
+
+      {/* タスク一覧 */}
+      <section style={{ marginBottom: "20px" }}>
+        <h2 style={{ fontSize: "14px", fontWeight: 600, marginBottom: "8px" }}>
+          {t("practiceMenuTitle", lang)}
+        </h2>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {tasks.map((task) => (
+            <a
+              key={task.id}
+              href={`/record?task=${encodeURIComponent(
+                task.label
+              )}&task_id=${encodeURIComponent(task.id)}`}
+              style={{
+                display: "block",
+                background: "#fff",
+                border: "1px solid #eee",
+                borderRadius: "12px",
+                padding: "12px 10px",
+                textDecoration: "none",
+                color: "#333",
+                boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+              }}
+            >
+              <div style={{ fontSize: "20px", marginBottom: "4px" }}>
+                {task.icon || "🎵"}
+              </div>
+              <div style={{ fontSize: "13px", fontWeight: 600 }}>
+                {task.label}
+              </div>
+              <div
+                style={{ fontSize: "11px", color: "#777", marginTop: "4px" }}
+              >
+                {t("tapToRecord", lang)}
+              </div>
+            </a>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}

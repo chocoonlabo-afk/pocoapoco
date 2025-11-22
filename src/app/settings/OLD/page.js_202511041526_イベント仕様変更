@@ -1,0 +1,906 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+
+// ---------- 定数・初期タスクセット ----------
+// A-1 対応：最初から id を持たせる
+const DEFAULT_TASKS = [
+  { id: "task_violin", label: "バイオリン", icon: "🎻" },
+  { id: "task_piano", label: "ピアノ", icon: "🎹" },
+  { id: "task_solfege", label: "ソルフェージュ", icon: "📝" },
+  { id: "task_japanese", label: "国語", icon: "📖" },
+  { id: "task_math", label: "算数", icon: "🔢" },
+  { id: "task_english", label: "英語", icon: "🇬🇧" },
+  { id: "task_science", label: "理科", icon: "🔬" },
+  { id: "task_social", label: "社会", icon: "🌍" },
+];
+
+// id がない古いタスクを読んだときに補う
+function normalizeTasksForSettings(tasksLike) {
+  if (!Array.isArray(tasksLike)) return [];
+
+  return tasksLike.map((t, index) => {
+    if (t.id) return t;
+    const base =
+      typeof t.label === "string" && t.label.length > 0
+        ? t.label
+        : `task_${index}`;
+    const normalizedId =
+      "task_" +
+      base
+        .toString()
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^\w_ぁ-んァ-ン一-龥]/g, "") +
+      "_" +
+      index;
+    return {
+      id: normalizedId,
+      label: t.label ?? `タスク${index + 1}`,
+      icon: t.icon ?? "🎵",
+    };
+  });
+}
+
+// ---------- CSVユーティリティ ----------
+
+// CSVエクスポート（ダウンロード）
+function exportToCSV(records) {
+  if (!records || records.length === 0) {
+    alert("きろくがありません。");
+    return;
+  }
+
+  const header = ["date", "task", "minutes", "count", "memo"];
+
+  const rows = records.map((r) => {
+    const dateStr = r.startedAt
+      ? new Date(r.startedAt).toLocaleString("ja-JP")
+      : "";
+    const minutes = Math.floor((r.seconds || 0) / 60);
+    const count = r.count || 0;
+    const memo = r.memo || "";
+    const task = r.task || "";
+
+    return [
+      `"${dateStr}"`,
+      `"${task.replace(/"/g, '""')}"`,
+      `"${minutes}"`,
+      `"${count}"`,
+      `"${memo.replace(/"/g, '""')}"`,
+    ].join(",");
+  });
+
+  const csv = [header.join(","), ...rows].join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const today = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `pocopoco_history_${today}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// CSV読み込み（シンプルパーサ）
+function parseCSV(csvText) {
+  const lines = csvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length < 2) {
+    throw new Error("CSVの行がたりません。");
+  }
+
+  const header = lines[0].split(",").map((h) => h.replace(/^"|"$/g, ""));
+
+  if (
+    header[0] !== "date" ||
+    header[1] !== "task" ||
+    header[2] !== "minutes" ||
+    header[3] !== "count" ||
+    header[4] !== "memo"
+  ) {
+    throw new Error("CSVのヘッダーが正しくありません。");
+  }
+
+  const records = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const rawCells = lines[i].split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/);
+    const cells = rawCells.map((c) => c.replace(/^"|"$/g, ""));
+
+    const [dateStr, task, minutesStr, countStr, memo] = cells;
+
+    const startedDate = new Date(dateStr);
+    if (isNaN(startedDate.getTime())) {
+      console.warn("日付がパースできません:", dateStr);
+      continue;
+    }
+
+    const seconds = parseInt(minutesStr, 10) * 60 || 0;
+    const count = parseInt(countStr, 10) || 0;
+
+    records.push({
+      task: task || "",
+      seconds,
+      count,
+      memo: memo || "",
+      startedAt: startedDate.toISOString(),
+    });
+  }
+
+  return records;
+}
+
+// 重複を避けながら履歴をマージ
+function mergeHistory(oldArr, newArr) {
+  const result = [...oldArr];
+
+  for (const rec of newArr) {
+    const exists = result.some(
+      (r) =>
+        r.startedAt === rec.startedAt &&
+        r.task === rec.task &&
+        (r.seconds || 0) === (rec.seconds || 0) &&
+        (r.count || 0) === (rec.count || 0)
+    );
+    if (!exists) {
+      result.push(rec);
+    }
+  }
+
+  return result;
+}
+
+// -------------------------------------------
+// ページ本体
+// -------------------------------------------
+
+export default function SettingsPage() {
+  // 表示言語
+  const [lang, setLang] = useState("jp");
+
+  // 親コード
+  const [parentCode, setParentCode] = useState("");
+
+  // イベント（発表会など）
+  const [eventTitle, setEventTitle] = useState("");
+  const [eventDate, setEventDate] = useState("");
+
+  // 誕生日
+  const [birthday, setBirthday] = useState("");
+
+  // 履歴データ（CSV入出力用）
+  const [records, setRecords] = useState([]);
+
+  // タスク一覧（カスタマイズ可能）
+  const [tasks, setTasks] = useState([]);
+
+  // 新規タスク用の入力欄
+  const [newTaskLabel, setNewTaskLabel] = useState("");
+  const [newTaskIcon, setNewTaskIcon] = useState("");
+
+  // UIメッセージ
+  const [statusMsg, setStatusMsg] = useState("");
+
+  // CSV取り込み用
+  const fileInputRef = useRef(null);
+
+  // 初期ロード
+  useEffect(() => {
+    try {
+      // 言語
+      const savedLang = window.localStorage.getItem("pocopoco_lang");
+      if (
+        savedLang === "hiragana" ||
+        savedLang === "jp" ||
+        savedLang === "en"
+      ) {
+        setLang(savedLang);
+      }
+
+      // 親コード
+      const savedCode = window.localStorage.getItem("pocopoco_parentCode");
+      if (savedCode) {
+        setParentCode(savedCode);
+      }
+
+      // イベント情報
+      const rawEvent = window.localStorage.getItem("pocopoco_event");
+      if (rawEvent) {
+        try {
+          const evt = JSON.parse(rawEvent);
+          if (evt && typeof evt === "object") {
+            setEventTitle(evt.title || "");
+            setEventDate(evt.date || "");
+          }
+        } catch (e) {
+          console.warn("イベント情報のJSON parseに失敗しました", e);
+        }
+      }
+
+      // 誕生日
+      const savedBirthday = window.localStorage.getItem("pocopoco_birthday");
+      if (savedBirthday) {
+        setBirthday(savedBirthday);
+      }
+
+      // 履歴
+      const rawHistory = window.localStorage.getItem("pocopoco_history");
+      if (rawHistory) {
+        const parsed = JSON.parse(rawHistory);
+        if (Array.isArray(parsed)) {
+          setRecords(parsed);
+        }
+      }
+
+      // タスク一覧
+      const rawTasks = window.localStorage.getItem("pocopoco_tasks");
+      if (rawTasks) {
+        try {
+          const parsedTasks = JSON.parse(rawTasks);
+          if (Array.isArray(parsedTasks) && parsedTasks.length > 0) {
+            // ← ここでidの正規化
+            const normalized = normalizeTasksForSettings(parsedTasks);
+            setTasks(normalized);
+            window.localStorage.setItem(
+              "pocopoco_tasks",
+              JSON.stringify(normalized)
+            );
+          } else {
+            setTasks(DEFAULT_TASKS);
+            window.localStorage.setItem(
+              "pocopoco_tasks",
+              JSON.stringify(DEFAULT_TASKS)
+            );
+          }
+        } catch (e) {
+          console.warn("pocopoco_tasks parse失敗。初期値を採用します", e);
+          setTasks(DEFAULT_TASKS);
+          window.localStorage.setItem(
+            "pocopoco_tasks",
+            JSON.stringify(DEFAULT_TASKS)
+          );
+        }
+      } else {
+        // まだ一度も保存されていない場合は初期セット
+        setTasks(DEFAULT_TASKS);
+        window.localStorage.setItem(
+          "pocopoco_tasks",
+          JSON.stringify(DEFAULT_TASKS)
+        );
+      }
+    } catch (e) {
+      console.error("settings load error", e);
+    }
+  }, []);
+
+  // -------- 保存系ハンドラ --------
+
+  function handleSaveLang() {
+    window.localStorage.setItem("pocopoco_lang", lang);
+    setStatusMsg("ひょうじげんごを保存しました。");
+  }
+
+  function handleSaveParentCode() {
+    if (!/^[0-9]{4}$/.test(parentCode)) {
+      setStatusMsg("4けたの数字で入力してください。");
+      return;
+    }
+    window.localStorage.setItem("pocopoco_parentCode", parentCode);
+    setStatusMsg("ひみつコードを保存しました。");
+  }
+
+  function handleSaveEvent() {
+    const data = {
+      title: eventTitle,
+      date: eventDate,
+    };
+    window.localStorage.setItem("pocopoco_event", JSON.stringify(data));
+    setStatusMsg("イベントを保存しました。");
+  }
+
+  function handleSaveBirthday() {
+    window.localStorage.setItem("pocopoco_birthday", birthday);
+    setStatusMsg("おたんじょうびを保存しました。");
+  }
+
+  // タスクをlocalStorageに反映
+  function persistTasks(nextTasks) {
+    setTasks(nextTasks);
+    window.localStorage.setItem("pocopoco_tasks", JSON.stringify(nextTasks));
+  }
+
+  function handleAddTask() {
+    const label = newTaskLabel.trim();
+    const icon = newTaskIcon.trim();
+
+    if (!label) {
+      setStatusMsg("タスクめい をいれてください。");
+      return;
+    }
+    if (!icon) {
+      setStatusMsg("アイコン（えもじなど）をいれてください。");
+      return;
+    }
+
+    // ここで必ずidを付ける（A-1対応）
+    const safeId =
+      "task_" +
+      label
+        .toString()
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^\w_ぁ-んァ-ン一-龥]/g, "") +
+      "_" +
+      Date.now().toString().slice(-5);
+
+    const next = [...tasks, { id: safeId, label, icon }];
+    persistTasks(next);
+
+    setNewTaskLabel("");
+    setNewTaskIcon("");
+    setStatusMsg(`「${label}」を ついかしました。`);
+  }
+
+  function handleDeleteTask(idx) {
+    const ok = window.confirm(
+      "このタスクをリストから けしますか？\n（これまでのきろくは のこります）"
+    );
+    if (!ok) return;
+
+    const next = tasks.filter((_, i) => i !== idx);
+    persistTasks(next);
+
+    setStatusMsg("タスクを けしました。");
+  }
+
+  // -------- CSV入出力 --------
+
+  function handleExportCSV() {
+    try {
+      exportToCSV(records);
+      setStatusMsg("CSVをダウンロードしました。");
+    } catch (e) {
+      console.error("export error", e);
+      setStatusMsg("エクスポートでエラーが発生しました。");
+    }
+  }
+
+  function handleImportClick() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  }
+
+  function handleFileSelected(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (loadEvent) => {
+      try {
+        const text = loadEvent.target.result;
+        const importedRecords = parseCSV(text);
+
+        const merged = mergeHistory(records, importedRecords);
+
+        window.localStorage.setItem(
+          "pocopoco_history",
+          JSON.stringify(merged)
+        );
+
+        setRecords(merged);
+
+        setStatusMsg(`CSVから${importedRecords.length}件インポートしました。`);
+      } catch (err) {
+        console.error("import error", err);
+        setStatusMsg(
+          "CSVのよみこみに しっぱいしました。 けいしきを かくにんしてください。"
+        );
+      }
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  // -------------------------------------------
+  // レンダリング
+  // -------------------------------------------
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      <h1
+        style={{
+          fontSize: "20px",
+          fontWeight: "600",
+          marginBottom: "8px",
+          color: "#4a148c",
+        }}
+      >
+        設定
+      </h1>
+
+      <p
+        style={{
+          fontSize: "12px",
+          lineHeight: 1.4,
+          color: "#666",
+          marginBottom: "16px",
+        }}
+      >
+        おうちのひと が つかう せっていです。こどもは さわらないでね。
+      </p>
+
+      {/* 表示言語 */}
+      <section style={cardStyle}>
+        <div style={sectionTitleStyle}>ひょうじげんご / Language</div>
+
+        <div style={sectionDescStyle}>
+          こどもには ひらがな、
+          おとなには ふつうの にほんご、
+          きょうし・先生には えいご など えらべます。
+        </div>
+
+        <select
+          value={lang}
+          onChange={(e) => setLang(e.target.value)}
+          style={inputStyle}
+        >
+          <option value="hiragana">にほんご（ひらがな）</option>
+          <option value="jp">にほんご（ふつう）</option>
+          <option value="en">English</option>
+        </select>
+
+        <button style={purpleButtonStyle} onClick={handleSaveLang}>
+          表示言語を保存
+        </button>
+      </section>
+
+      {/* 親コード */}
+      <section style={cardStyle}>
+        <div style={sectionTitleStyle}>おとなの ひみつコード（4けた）</div>
+
+        <div style={sectionDescStyle}>
+          このコードを しっているひと だけが
+          「れんしゅうのきろく」を へんしゅう・さくじょ できます。
+        </div>
+
+        <input
+          type="password"
+          value={parentCode}
+          onChange={(e) => setParentCode(e.target.value)}
+          placeholder="1234"
+          style={{
+            ...inputStyle,
+            fontSize: "16px",
+            letterSpacing: "0.3em",
+            marginBottom: "12px",
+          }}
+        />
+
+        <button style={gradientButtonStyle} onClick={handleSaveParentCode}>
+          ひみつコードを保存
+        </button>
+      </section>
+
+      {/* タスクのせってい */}
+      <section style={cardStyle}>
+        <div style={sectionHeaderRowStyle}>
+          <div style={sectionTitleStyle}>タスクのせってい</div>
+          <div style={adultBadgeStyle}>おとな専用</div>
+        </div>
+
+        <div style={sectionDescStyle}>
+          ホームに ならぶ ボタンを つくります。
+          えもじ と なまえ を いれて ついかできます。
+          いらないタスクは「けす」でひょうじから はずせます。
+          （きろくデータは のこります）
+        </div>
+
+        {/* いま登録されているタスク一覧 */}
+        <div
+          style={{
+            marginBottom: "16px",
+            border: "1px solid #eee",
+            borderRadius: "8px",
+            padding: "8px 12px",
+            maxHeight: "160px",
+            overflowY: "auto",
+            backgroundColor: "#fafafa",
+          }}
+        >
+          {tasks.length === 0 ? (
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#888",
+                textAlign: "center",
+                padding: "12px 0",
+              }}
+            >
+              （タスクは まだ ありません）
+            </div>
+          ) : (
+            tasks.map((task, idx) => (
+              <div
+                key={task.id || idx}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  fontSize: "14px",
+                  padding: "6px 0",
+                  borderBottom:
+                    idx === tasks.length - 1
+                      ? "none"
+                      : "1px solid rgba(0,0,0,0.05)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    lineHeight: 1.3,
+                  }}
+                >
+                  <span style={{ fontSize: "20px" }}>{task.icon}</span>
+                  <span style={{ fontWeight: 600, color: "#333" }}>
+                    {task.label}
+                  </span>
+                </div>
+
+                <button
+                  onClick={() => handleDeleteTask(idx)}
+                  style={{
+                    backgroundColor: "#fff",
+                    border: "1px solid #ccc",
+                    borderRadius: "8px",
+                    padding: "6px 10px",
+                    fontSize: "12px",
+                    lineHeight: 1.2,
+                    color: "#a00",
+                    minWidth: "48px",
+                  }}
+                >
+                  けす
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* タスク追加フォーム */}
+        <div
+          style={{
+            fontSize: "13px",
+            fontWeight: 600,
+            marginBottom: "8px",
+          }}
+        >
+          タスクをついか
+        </div>
+
+        <label
+          style={{
+            display: "block",
+            fontSize: "12px",
+            fontWeight: "600",
+            marginBottom: "4px",
+          }}
+        >
+          アイコン（えもじ）
+        </label>
+        <input
+          type="text"
+          value={newTaskIcon}
+          onChange={(e) => setNewTaskIcon(e.target.value)}
+          placeholder="🎻 や 📖 など"
+          style={{ ...inputStyle, marginBottom: "12px" }}
+        />
+
+        <label
+          style={{
+            display: "block",
+            fontSize: "12px",
+            fontWeight: "600",
+            marginBottom: "4px",
+          }}
+        >
+          タスクめい
+        </label>
+        <input
+          type="text"
+          value={newTaskLabel}
+          onChange={(e) => setNewTaskLabel(e.target.value)}
+          placeholder="バイオリン / さんすう / えいご など"
+          style={{ ...inputStyle, marginBottom: "12px" }}
+        />
+
+        <button style={purpleButtonStyle} onClick={handleAddTask}>
+          タスクをついか
+        </button>
+      </section>
+
+      {/* イベント */}
+      <section style={cardStyle}>
+        <div style={sectionTitleStyle}>イベント / 本番の日</div>
+
+        <div style={sectionDescStyle}>
+          はっぴょうかい・コンクール など、
+          つぎの たいせつな日 を 1つ だけ きろくします。
+          ホームに「◯◯まで あと◯日」と出す用です。
+        </div>
+
+        <label style={labelStyle}>イベント名</label>
+        <input
+          type="text"
+          value={eventTitle}
+          onChange={(e) => setEventTitle(e.target.value)}
+          placeholder="はっぴょうかい / コンクール本選 など"
+          style={{ ...inputStyle, marginBottom: "12px" }}
+        />
+
+        <label style={labelStyle}>日付</label>
+        <input
+          type="date"
+          value={eventDate}
+          onChange={(e) => setEventDate(e.target.value)}
+          style={{ ...inputStyle, marginBottom: "12px" }}
+        />
+
+        <button style={deepPurpleButtonStyle} onClick={handleSaveEvent}>
+          イベントを保存
+        </button>
+      </section>
+
+      {/* おたんじょうび */}
+      <section style={cardStyle}>
+        <div style={sectionTitleStyle}>おたんじょうび</div>
+
+        <div style={sectionDescStyle}>
+          この日に アプリをひらくと
+          「🎂おたんじょうびおめでとう！」メッセージを
+          こどもむけに ひょうじ します。
+        </div>
+
+        <label style={labelStyle}>日付</label>
+        <input
+          type="date"
+          value={birthday}
+          onChange={(e) => setBirthday(e.target.value)}
+          style={{ ...inputStyle, marginBottom: "12px" }}
+        />
+
+        <button style={pinkButtonStyle} onClick={handleSaveBirthday}>
+          おたんじょうびを保存
+        </button>
+      </section>
+
+      {/* データのバックアップ / ひっこし */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "12px",
+          padding: "16px",
+          marginBottom: "24px",
+          backgroundColor: "#f9f9ff",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
+        }}
+      >
+        <div style={sectionHeaderRowStyle}>
+          <div style={sectionTitleStyle}>データのバックアップ / ひっこし</div>
+          <div style={adultBadgeStyle}>おとな専用</div>
+        </div>
+
+        <div style={sectionDescStyle}>
+          きろくを ほかの きかい に うつす とき や、
+          まいにち の バックアップようです。
+        </div>
+
+        <button style={purpleButtonStyle} onClick={handleExportCSV}>
+          📤 きろくをCSVでダウンロード
+        </button>
+
+        <button style={greenButtonStyle} onClick={handleImportClick}>
+          📥 CSVから よみこむ
+        </button>
+
+        <div
+          style={{
+            fontSize: "11px",
+            color: "#444",
+            lineHeight: 1.4,
+            marginTop: "8px",
+          }}
+        >
+          ※ まえにダウンロードした pocopoco_history_◯◯◯.csv を
+          えらんでください。
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          style={{ display: "none" }}
+          onChange={handleFileSelected}
+        />
+      </section>
+
+      {/* ステータス表示 */}
+      {statusMsg && (
+        <div
+          style={{
+            textAlign: "center",
+            fontSize: "13px",
+            lineHeight: 1.4,
+            color: "#4a148c",
+            backgroundColor: "#f5ecff",
+            border: "1px solid #e0ccff",
+            borderRadius: "8px",
+            padding: "8px 12px",
+          }}
+        >
+          {statusMsg}
+        </div>
+      )}
+
+      {/* 戻る */}
+      <div style={{ textAlign: "center", marginTop: "24px" }}>
+        <button
+          onClick={() => {
+            window.location.href = "/";
+          }}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#666",
+            fontSize: "14px",
+            textDecoration: "underline",
+            padding: "8px 12px",
+          }}
+        >
+          ← ホームにもどる
+        </button>
+      </div>
+    </main>
+  );
+}
+
+// -------------------------------------------
+// スタイル共通
+// -------------------------------------------
+
+const cardStyle = {
+  border: "1px solid #ddd",
+  borderRadius: "12px",
+  padding: "16px",
+  marginBottom: "24px",
+  backgroundColor: "#fff",
+  boxShadow: "0 2px 4px rgba(0,0,0,0.03)",
+};
+
+const sectionTitleStyle = {
+  fontSize: "15px",
+  fontWeight: "600",
+  marginBottom: "8px",
+};
+
+const sectionHeaderRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "center",
+  gap: "6px",
+  marginBottom: "8px",
+};
+
+const sectionDescStyle = {
+  fontSize: "12px",
+  color: "#888",
+  lineHeight: 1.4,
+  marginBottom: "12px",
+  whiteSpace: "pre-wrap",
+};
+
+const labelStyle = {
+  display: "block",
+  fontSize: "13px",
+  fontWeight: "600",
+  marginBottom: "4px",
+};
+
+const inputStyle = {
+  width: "100%",
+  border: "1px solid #bbb",
+  borderRadius: "8px",
+  fontSize: "14px",
+  padding: "8px 10px",
+  backgroundColor: "#fff",
+};
+
+const adultBadgeStyle = {
+  backgroundColor: "#fff8e1",
+  color: "#a15a00",
+  fontSize: "11px",
+  fontWeight: "600",
+  border: "1px solid #ffe0a1",
+  borderRadius: "6px",
+  padding: "2px 6px",
+  lineHeight: 1.3,
+};
+
+const purpleButtonStyle = {
+  width: "100%",
+  backgroundColor: "#4a148c",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "15px",
+  fontWeight: "600",
+  padding: "12px",
+  boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+  marginBottom: "12px",
+  textAlign: "center",
+};
+
+const deepPurpleButtonStyle = {
+  width: "100%",
+  backgroundColor: "#6a1b9a",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "15px",
+  fontWeight: "600",
+  padding: "12px",
+  boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+};
+
+const pinkButtonStyle = {
+  width: "100%",
+  backgroundColor: "#d81b60",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "15px",
+  fontWeight: "600",
+  padding: "12px",
+  boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+};
+
+const gradientButtonStyle = {
+  width: "100%",
+  background:
+    "linear-gradient(90deg, rgb(204,0,255), rgb(255,102,153))",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "15px",
+  fontWeight: "600",
+  padding: "12px",
+  boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+};
+
+const greenButtonStyle = {
+  width: "100%",
+  backgroundColor: "#00695c",
+  color: "#fff",
+  border: "none",
+  borderRadius: "10px",
+  fontSize: "15px",
+  fontWeight: "600",
+  padding: "12px",
+  boxShadow: "0 4px 8px rgba(0,0,0,0.15)",
+  textAlign: "center",
+};

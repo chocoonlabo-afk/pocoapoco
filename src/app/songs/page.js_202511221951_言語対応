@@ -1,0 +1,787 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+const HISTORY_STORAGE_KEY = "pocopoco_history";
+
+// ────────────── 履歴ヘルパー ──────────────
+
+// 履歴レコードから childId を取得
+function getHistoryChildId(r) {
+  return (
+    r.child_id ??
+    r.childId ??
+    (r.child && r.child.id) ??
+    ""
+  );
+}
+
+// 履歴レコードから秒数を取得
+function getHistorySeconds(r) {
+  const sec =
+    r.seconds ??
+    r.duration ??
+    r.totalSeconds ??
+    r.lengthSec ??
+    0;
+  return Number(sec) || 0;
+}
+
+// ある曲に対する合計秒数を計算
+function calcTotalSecondsForSong(song, historyRecords) {
+  const songId = song.id ?? song.songId;
+  const songTitle = song.title ?? song.songTitle ?? "";
+
+  return historyRecords.reduce((sum, r) => {
+    const sec = getHistorySeconds(r);
+    if (!sec) return sum;
+
+    const histId =
+      r.song_id ?? r.songId ?? (r.song && r.song.id);
+    const histTitle =
+      r.song_title ??
+      r.songTitle ??
+      r.title ??
+      (r.song && r.song.title) ??
+      "";
+
+    const matchById =
+      songId !== undefined &&
+      songId !== null &&
+      songId !== "" &&
+      histId !== undefined &&
+      histId !== null &&
+      histId !== "" &&
+      String(songId) === String(histId);
+
+    const matchByTitle =
+      songTitle &&
+      histTitle &&
+      songTitle === histTitle;
+
+    if (matchById || matchByTitle) {
+      return sum + sec;
+    }
+    return sum;
+  }, 0);
+}
+
+// 秒 → H:MM
+function formatTotalTime(seconds) {
+  const sec = Number(seconds) || 0;
+  if (sec <= 0) return "";
+  const totalMin = Math.floor(sec / 60);
+  const hours = Math.floor(totalMin / 60);
+  const minutes = totalMin % 60;
+  const h = String(hours);
+  const m = String(minutes).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+// CSV文字列 → 曲データ配列
+function parseSongsCsv(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
+  if (lines.length === 0) return [];
+
+  const [headerLine, ...rows] = lines;
+  const headers = headerLine.split(",").map((h) => h.trim());
+
+  const idxComposer = headers.indexOf("composer");
+  const idxTitle = headers.indexOf("title");
+  const idxDate = headers.indexOf("date");
+  const idxPlace = headers.indexOf("place");
+  const idxMemo = headers.indexOf("memo");
+
+  // ヘッダありパターン
+  if (idxTitle !== -1 || idxComposer !== -1) {
+    return rows.map((line) => {
+      const cols = line.split(",");
+      return {
+        composer: idxComposer >= 0 ? cols[idxComposer] || "" : "",
+        title: idxTitle >= 0 ? cols[idxTitle] || "" : "",
+        date: idxDate >= 0 ? cols[idxDate] || "" : "",
+        place: idxPlace >= 0 ? cols[idxPlace] || "" : "",
+        memo: idxMemo >= 0 ? cols[idxMemo] || "" : "",
+      };
+    });
+  }
+
+  // 旧形式（作曲者名, 曲名, 発表日, 発表場所, メモ）として解釈
+  return rows.map((line) => {
+    const cols = line.split(",");
+    return {
+      composer: cols[0] || "",
+      title: cols[1] || "",
+      date: cols[2] || "",
+      place: cols[3] || "",
+      memo: cols[4] || "",
+    };
+  });
+}
+
+// ────────────── 画面本体 ──────────────
+
+export default function SongListPage() {
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("");
+
+  const [isChildMode, setIsChildMode] = useState(false);
+
+  const [songsByChild, setSongsByChild] = useState({});
+  const [historyRecords, setHistoryRecords] = useState([]);
+
+  const [sortKey, setSortKey] = useState("date");
+  const [sortOrder, setSortOrder] = useState("asc");
+
+  const fileInputRef = useRef(null);
+
+  // 初期ロード（子ども・曲・モード判定）
+  useEffect(() => {
+    let childIdFromQuery = "";
+    let modeFromQuery = "";
+
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      childIdFromQuery = params.get("childId") || "";
+      modeFromQuery = params.get("mode") || "";
+    }
+
+    // ★ 子モード判定：URL / pocopoco_mode / pocopoco_role を見る
+    let childMode = false;
+    if (modeFromQuery === "child") {
+      childMode = true;
+    } else {
+      try {
+        const storedMode = localStorage.getItem("pocopoco_mode");
+        const storedRole = localStorage.getItem("pocopoco_role");
+        if (storedMode === "child" || storedRole === "child") {
+          childMode = true;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    setIsChildMode(childMode);
+
+    // 子ども一覧
+    try {
+      const rawChildren = localStorage.getItem("pocopoco_children");
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) {
+          setChildren(arr);
+
+          const savedCurrent = localStorage.getItem(
+            "pocopoco_current_child_id"
+          );
+
+          let initialId = "";
+
+          // 子モードで childId 指定あり → それを優先
+          if (
+            childMode &&
+            childIdFromQuery &&
+            arr.find((c) => c.id === childIdFromQuery)
+          ) {
+            initialId = childIdFromQuery;
+          } else if (
+            childIdFromQuery &&
+            arr.find((c) => c.id === childIdFromQuery)
+          ) {
+            initialId = childIdFromQuery;
+          } else if (
+            !childMode &&
+            savedCurrent &&
+            arr.find((c) => c.id === savedCurrent)
+          ) {
+            initialId = savedCurrent;
+          } else if (arr.length > 0) {
+            initialId = arr[0].id;
+          }
+
+          if (initialId) {
+            setCurrentChildId(initialId);
+            try {
+              localStorage.setItem(
+                "pocopoco_current_child_id",
+                initialId
+              );
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("songs: children load error", e);
+    }
+
+    // 曲データ読み込み
+    try {
+      const rawSongs = localStorage.getItem("pocopoco_songs");
+      if (rawSongs) {
+        const obj = JSON.parse(rawSongs);
+        if (obj && typeof obj === "object") {
+          setSongsByChild(obj);
+        }
+      }
+    } catch (e) {
+      console.warn("songs: songs load error", e);
+    }
+  }, []);
+
+  // 履歴読み込み（現在の子ども用）
+  useEffect(() => {
+    if (!currentChildId) {
+      setHistoryRecords([]);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (!raw) {
+        setHistoryRecords([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      const arr = Array.isArray(parsed) ? parsed : [];
+      const filtered = arr.filter(
+        (r) => getHistoryChildId(r) === currentChildId
+      );
+      setHistoryRecords(filtered);
+    } catch (e) {
+      console.warn("songs: history load error", e);
+      setHistoryRecords([]);
+    }
+  }, [currentChildId]);
+
+  const currentChild =
+    children.find((c) => c.id === currentChildId) || null;
+
+  const currentSongs = Array.isArray(songsByChild[currentChildId])
+    ? [...songsByChild[currentChildId]]
+    : [];
+
+  // ソート
+  const sortedSongs = currentSongs.sort((a, b) => {
+    const va = a || {};
+    const vb = b || {};
+    let x = "";
+    let y = "";
+
+    switch (sortKey) {
+      case "title":
+        x = va.title || va.songTitle || "";
+        y = vb.title || vb.songTitle || "";
+        return sortOrder === "asc"
+          ? x.localeCompare(y)
+          : y.localeCompare(x);
+      case "composer":
+        x = va.composer || "";
+        y = vb.composer || "";
+        return sortOrder === "asc"
+          ? x.localeCompare(y)
+          : y.localeCompare(x);
+      case "place":
+        x = va.place || "";
+        y = vb.place || "";
+        return sortOrder === "asc"
+          ? x.localeCompare(y)
+          : y.localeCompare(x);
+      case "date":
+      default: {
+        const da = va.date ? new Date(va.date).getTime() : 0;
+        const db = vb.date ? new Date(vb.date).getTime() : 0;
+        return sortOrder === "asc" ? da - db : db - da;
+      }
+    }
+  });
+
+  const toggleSort = (key) => {
+    if (sortKey === key) {
+      setSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortOrder("asc");
+    }
+  };
+
+  const sortHeaderStyle = (key) => ({
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    padding: "6px 8px",
+    borderBottom: "1px solid #eee",
+    fontWeight: sortKey === key ? "600" : "500",
+    color: sortKey === key ? "#6a1b9a" : "#555",
+    fontSize: "11px",
+    textAlign: "left",
+  });
+
+  const headerCellStyle = {
+    padding: "6px 8px",
+    borderBottom: "1px solid #eee",
+    whiteSpace: "nowrap",
+    fontSize: "11px",
+    textAlign: "left",
+    color: "#555",
+  };
+
+  const sortIcon = (key) => {
+    if (sortKey !== key) return "▽";
+    return sortOrder === "asc" ? "▲" : "▼";
+  };
+
+  const handleAddClick = () => {
+    if (!currentChildId) {
+      alert("まず 子どもを 1人以上 登録してください。");
+      return;
+    }
+    window.location.href = `/songs/new?childId=${currentChildId}`;
+  };
+
+  const handleEditClick = (index) => {
+    if (!currentChildId) return;
+    window.location.href = `/songs/edit?childId=${currentChildId}&index=${index}`;
+  };
+
+  // CSV出力（total_minutes 追加）
+  const handleExportCsv = () => {
+    if (!currentChildId) {
+      alert("子どもを選択してください。");
+      return;
+    }
+    if (sortedSongs.length === 0) {
+      alert("この子の曲は まだ登録されていません。");
+      return;
+    }
+
+    const header = [
+      "composer",
+      "title",
+      "date",
+      "place",
+      "memo",
+      "total_minutes",
+    ];
+    const lines = [header.join(",")];
+
+    sortedSongs.forEach((s) => {
+      const totalSeconds = calcTotalSecondsForSong(
+        s,
+        historyRecords
+      );
+      const totalMinutes =
+        totalSeconds > 0 ? Math.floor(totalSeconds / 60) : 0;
+
+      const row = [
+        (s.composer || "").replace(/,/g, " "),
+        ((s.title || s.songTitle || "")).replace(/,/g, " "),
+        s.date || "",
+        (s.place || "").replace(/,/g, " "),
+        (s.memo || "").replace(/[\r\n,]/g, " "),
+        totalMinutes ? String(totalMinutes) : "",
+      ];
+      lines.push(row.join(","));
+    });
+
+    const csv = "\uFEFF" + lines.join("\n"); // BOM 付き
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `songs_${currentChild?.name || "child"}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // CSV取込（全上書き＋ヘッダーチェック）
+  const handleImportClick = () => {
+    if (!currentChildId) {
+      alert("子どもを選択してください。");
+      return;
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result;
+      if (typeof text !== "string") return;
+
+      // まずヘッダーチェック（最初の5項目）
+      const lines = text
+        .split(/\r?\n/)
+        .filter((l) => l.trim() !== "");
+      if (lines.length === 0) {
+        alert("ファイルが空です。");
+        return;
+      }
+      const headerCols = lines[0]
+        .split(",")
+        .map((h) => h.trim());
+      const expected = [
+        "composer",
+        "title",
+        "date",
+        "place",
+        "memo",
+      ];
+      const headerOk = expected.every(
+        (name, idx) => headerCols[idx] === name
+      );
+      if (!headerOk) {
+        alert(
+          "CSVの1行目の項目名が想定と異なります。\n" +
+            "pocoapoco から出力した曲リストCSVを使用してください。"
+        );
+        return;
+      }
+
+      const imported = parseSongsCsv(text);
+      if (imported.length === 0) {
+        alert("読み込める曲データが 見つかりませんでした。");
+        return;
+      }
+
+      // ★上書き保存（追加ではない）
+      const updated = { ...songsByChild };
+      updated[currentChildId] = imported;
+
+      setSongsByChild(updated);
+      try {
+        localStorage.setItem(
+          "pocopoco_songs",
+          JSON.stringify(updated)
+        );
+      } catch (err) {
+        console.error("failed to save songs", err);
+      }
+
+      alert(
+        `曲データを ${imported.length} 件 読み込みました。（既存データは上書き）`
+      );
+    };
+    reader.readAsText(file, "utf-8");
+  };
+
+  return (
+    <main
+      style={{
+        fontFamily:
+          "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "540px",
+        margin: "0 auto",
+      }}
+    >
+      {/* 上部カード */}
+      <section
+        style={{
+          borderRadius: "16px",
+          background: "#fbf7ff",
+          border: "1px solid #eadfff",
+          padding: "12px 14px",
+          marginBottom: "16px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          {/* 子モードではセレクト非表示・名前だけ */}
+          {isChildMode ? (
+            <div
+              style={{
+                flex: "1 1 0",
+                minWidth: "140px",
+                fontSize: "13px",
+                padding: "6px 12px",
+              }}
+            >
+              {currentChild?.name || "子ども未登録"}
+            </div>
+          ) : (
+            <select
+              value={currentChildId}
+              onChange={(e) => setCurrentChildId(e.target.value)}
+              style={{
+                flex: "1 1 0",
+                minWidth: "140px",
+                borderRadius: "999px",
+                border: "1px solid #ccc",
+                padding: "6px 12px",
+                fontSize: "13px",
+                background: "#fff",
+              }}
+            >
+              {children.length === 0 && (
+                <option value="">子ども未登録</option>
+              )}
+              {children.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* CSVボタン＋追加 */}
+          <div
+            style={{
+              display: "flex",
+              gap: "6px",
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #ccc",
+                padding: "5px 10px",
+                fontSize: "11px",
+                background: "#fff",
+                whiteSpace: "nowrap",
+              }}
+            >
+              CSV出力
+            </button>
+            <button
+              type="button"
+              onClick={handleImportClick}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #ccc",
+                padding: "5px 10px",
+                fontSize: "11px",
+                background: "#fff",
+                whiteSpace: "nowrap",
+              }}
+            >
+              CSV取込
+            </button>
+            <button
+              type="button"
+              onClick={handleAddClick}
+              style={{
+                borderRadius: "999px",
+                border: "none",
+                padding: "5px 14px",
+                fontSize: "12px",
+                background:
+                  "linear-gradient(135deg, #a855f7, #ec4899)",
+                color: "#fff",
+                fontWeight: "600",
+                whiteSpace: "nowrap",
+              }}
+            >
+              リストに追加
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* 曲リスト */}
+      <section>
+        <h2
+          style={{
+            fontSize: "14px",
+            marginBottom: "4px",
+            color: "#4a148c",
+          }}
+        >
+          登録済みの曲（{currentChild?.name || "―"}）
+        </h2>
+        <p
+          style={{
+            fontSize: "11px",
+            color: "#666",
+            marginBottom: "8px",
+            lineHeight: 1.4,
+          }}
+        >
+          1曲に対して発表日が複数日ある場合や、練習開始日などを記載したい場合には、メモ欄をご活用ください。
+        </p>
+
+        {sortedSongs.length === 0 ? (
+          <p
+            style={{
+              fontSize: "13px",
+              color: "#777",
+              marginTop: "6px",
+            }}
+          >
+            この子の曲が まだ登録されていません。
+            「リストに追加」ボタンから 追加してください。
+          </p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: "12px",
+              }}
+            >
+              <thead>
+                <tr style={{ backgroundColor: "#faf5ff" }}>
+                  <th
+                    onClick={() => toggleSort("composer")}
+                    style={sortHeaderStyle("composer")}
+                  >
+                    作曲者名 {sortIcon("composer")}
+                  </th>
+                  <th
+                    onClick={() => toggleSort("title")}
+                    style={sortHeaderStyle("title")}
+                  >
+                    曲名 {sortIcon("title")}
+                  </th>
+                  <th
+                    onClick={() => toggleSort("date")}
+                    style={sortHeaderStyle("date")}
+                  >
+                    発表日 {sortIcon("date")}
+                  </th>
+                  <th
+                    onClick={() => toggleSort("place")}
+                    style={sortHeaderStyle("place")}
+                  >
+                    発表場所 {sortIcon("place")}
+                  </th>
+                  <th style={headerCellStyle}>練習合計</th>
+                  <th style={headerCellStyle}>メモ</th>
+                  <th style={headerCellStyle}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedSongs.map((song, index) => {
+                  const totalSeconds = calcTotalSecondsForSong(
+                    song,
+                    historyRecords
+                  );
+                  const totalLabel = formatTotalTime(totalSeconds);
+
+                  return (
+                    <tr key={index}>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: "1px solid #f2f2f2",
+                        }}
+                      >
+                        {song.composer || ""}
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: "1px solid #f2f2f2",
+                        }}
+                      >
+                        {song.title || song.songTitle || ""}
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: "1px solid #f2f2f2",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {song.date || ""}
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: "1px solid #f2f2f2",
+                        }}
+                      >
+                        {song.place || ""}
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: "1px solid #f2f2f2",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {totalLabel}
+                      </td>
+                      {/* メモ4行＋ホバー全文 */}
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: "1px solid #f2f2f2",
+                          maxWidth: "160px",
+                        }}
+                        title={song.memo || ""}
+                      >
+                        <div
+                          style={{
+                            whiteSpace: "pre-wrap",
+                            wordBreak: "break-word",
+                            overflow: "hidden",
+                            display: "-webkit-box",
+                            WebkitLineClamp: 4,
+                            WebkitBoxOrient: "vertical",
+                          }}
+                        >
+                          {song.memo || ""}
+                        </div>
+                      </td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          borderBottom: "1px solid #f2f2f2",
+                          textAlign: "center",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleEditClick(index)}
+                          style={{
+                            borderRadius: "999px",
+                            border: "none",
+                            padding: "4px 10px",
+                            fontSize: "11px",
+                            background:
+                              "linear-gradient(135deg, #a855f7, #ec4899)",
+                            color: "#fff",
+                            fontWeight: "600",
+                          }}
+                        >
+                          編集
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        style={{ display: "none" }}
+        onChange={handleFileChange}
+      />
+    </main>
+  );
+}

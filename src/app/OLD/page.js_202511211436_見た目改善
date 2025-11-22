@@ -1,0 +1,771 @@
+// src/app/page.js
+"use client";
+
+import { useEffect, useState } from "react";
+import { t, getLangFromStorage } from "./lib/i18n";
+import {
+  LS_CHILDREN,
+  LS_CURRENT_CHILD_ID,
+  LS_TASKS,
+  LS_HISTORY,
+  LS_TIMETABLE_BY_CHILD,
+  LS_EVENTS,
+  LS_CALENDAR_TASK_FILTER,
+  LS_CALENDAR_SETTINGS,
+} from "./constants";
+
+const DEFAULT_TASKS = [
+  { id: "task_violin", label: "バイオリン", icon: "🎻" },
+  { id: "task_piano", label: "ピアノ", icon: "🎹" },
+  { id: "task_solfege", label: "ソルフェージュ", icon: "📝" },
+  { id: "task_japanese", label: "国語", icon: "📖" },
+  { id: "task_math", label: "算数", icon: "🔢" },
+  { id: "task_english", label: "英語", icon: "GB" },
+];
+
+const WEEKLY_STORAGE_KEY = LS_TIMETABLE_BY_CHILD;
+const PERIOD_COUNT = 15;
+const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+// カレンダー用バッジのデフォルト
+const DEFAULT_BADGES = [
+  { id: "level1", name: "少しでも練習した日", minMinutes: 1, icon: "🌸" },
+  { id: "level2", name: "たくさん練習（銅）", minMinutes: 30, icon: "🥉" },
+  { id: "level3", name: "もっとたくさん（銀）", minMinutes: 60, icon: "🥈" },
+  { id: "level4", name: "すごくがんばった（金）", minMinutes: 90, icon: "🥇" },
+];
+
+function loadCalendarSettingsFromStorage() {
+  let firstDayOfWeek = "sun";
+  let badges = DEFAULT_BADGES;
+
+  try {
+    const raw = localStorage.getItem(LS_CALENDAR_SETTINGS);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && typeof data === "object") {
+        if (data.firstDayOfWeek === "mon") firstDayOfWeek = "mon";
+
+        if (Array.isArray(data.badges) && data.badges.length > 0) {
+          badges = DEFAULT_BADGES.map((def) => {
+            const found = data.badges.find((b) => b.id === def.id);
+            return found ? { ...def, ...found } : def;
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("calendar settings parse error", e);
+  }
+  return { firstDayOfWeek, badges };
+}
+
+function pickBadgeIcon(totalMinutes, badges) {
+  if (totalMinutes <= 0) return "";
+  const sorted = [...badges].sort((a, b) => a.minMinutes - b.minMinutes);
+  let chosen = null;
+  for (const b of sorted) {
+    if (totalMinutes >= b.minMinutes) {
+      chosen = b;
+    }
+  }
+  return chosen ? chosen.icon : "";
+}
+
+export default function HomePage() {
+  const [lang, setLang] = useState("jp");
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("");
+  const [tasks, setTasks] = useState(DEFAULT_TASKS);
+  const [eventData, setEventData] = useState(null);
+
+  const [todayTotalSec, setTodayTotalSec] = useState(0);
+  const [todayTotalCount, setTodayTotalCount] = useState(0);
+  const [todayTaskSeconds, setTodayTaskSeconds] = useState({});
+  const [totalTaskSeconds, setTotalTaskSeconds] = useState({});
+  const [dailySeconds, setDailySeconds] = useState({}); // 日付ごとの合計秒数
+
+  const [todaySlots, setTodaySlots] = useState(Array(PERIOD_COUNT).fill(""));
+
+  const todayDate = new Date();
+  const [calendarYear] = useState(todayDate.getFullYear());
+  const [calendarMonth] = useState(todayDate.getMonth() + 1);
+
+  const [calendarSettings, setCalendarSettings] = useState({
+    firstDayOfWeek: "sun",
+    badges: DEFAULT_BADGES,
+  });
+
+  // 初期読み込み
+  useEffect(() => {
+    const savedLang = getLangFromStorage();
+    setLang(savedLang);
+
+    // 子ども一覧
+    const rawChildren = localStorage.getItem(LS_CHILDREN);
+    let loadedChildren = [];
+    if (rawChildren) {
+      try {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) {
+          loadedChildren = arr;
+          setChildren(arr);
+        }
+      } catch (e) {
+        console.warn("children parse error", e);
+      }
+    }
+
+    // 現在の子
+    let childId =
+      localStorage.getItem(LS_CURRENT_CHILD_ID) ||
+      (loadedChildren[0]?.id || "");
+    setCurrentChildId(childId);
+
+    // タスク
+    const rawTasks = localStorage.getItem(LS_TASKS);
+    if (rawTasks) {
+      try {
+        const arr = JSON.parse(rawTasks);
+        if (Array.isArray(arr) && arr.length > 0) setTasks(arr);
+      } catch (e) {
+        console.warn("tasks parse error", e);
+      }
+    }
+
+    // 合計・カレンダー用データ
+    calcTotals(childId);
+    loadHomeEvent(childId);
+    loadTodayTimetable(childId);
+
+    // カレンダー設定
+    setCalendarSettings(loadCalendarSettingsFromStorage());
+  }, []);
+
+  // 合計・タスク別・日別（その子）
+  function calcTotals(childId) {
+    const rawHistory = localStorage.getItem(LS_HISTORY);
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    if (!rawHistory) {
+      setTodayTotalSec(0);
+      setTodayTotalCount(0);
+      setTodayTaskSeconds({});
+      setTotalTaskSeconds({});
+      setDailySeconds({});
+      return;
+    }
+
+    try {
+      const arr = JSON.parse(rawHistory);
+      if (!Array.isArray(arr)) return;
+
+      let todaySecSum = 0;
+      let todayCountSum = 0;
+      const todayPerTask = {};
+      const totalPerTask = {};
+      const daily = {};
+
+      for (const r of arr) {
+        const startedAt =
+          r.startedAt || r.start || r.dateTime || r.datetime || r.date || "";
+        if (!startedAt || !startedAt.slice) continue;
+        const d = startedAt.slice(0, 10);
+
+        const recChild =
+          r.child_id || r.childId || r.child || r.kidId || r.kid_id || "";
+        if (childId && recChild && recChild !== childId) continue;
+
+        const sec = Number(
+          r.seconds ??
+            r.durationSec ??
+            r.duration ??
+            r.timeSec ??
+            r.time ??
+            0
+        );
+        const count = Number(r.count ?? r.times ?? r.reps ?? 0);
+        const key =
+          r.task_id ||
+          r.taskId ||
+          r.task_title ||
+          r.taskTitle ||
+          r.task_name ||
+          r.taskName ||
+          r.task ||
+          r.title ||
+          "";
+        if (!key) continue;
+
+        totalPerTask[key] = (totalPerTask[key] || 0) + sec;
+        daily[d] = (daily[d] || 0) + sec;
+
+        if (d === todayStr) {
+          todaySecSum += sec;
+          todayCountSum += count;
+          todayPerTask[key] = (todayPerTask[key] || 0) + sec;
+        }
+      }
+
+      setTodayTotalSec(todaySecSum);
+      setTodayTotalCount(todayCountSum);
+      setTodayTaskSeconds(todayPerTask);
+      setTotalTaskSeconds(totalPerTask);
+      setDailySeconds(daily);
+    } catch (e) {
+      console.warn("history parse error", e);
+    }
+  }
+
+  // 次のイベント
+  function loadHomeEvent(childId) {
+    const rawEvents = localStorage.getItem(LS_EVENTS);
+    if (rawEvents) {
+      try {
+        const arr = JSON.parse(rawEvents);
+        if (Array.isArray(arr) && arr.length > 0) {
+          const childKey = childId || "all";
+
+          let homeEv =
+            arr.find(
+              (e) =>
+                e.home === true &&
+                (e.child_id === childKey ||
+                  (childKey === "all" &&
+                    (!e.child_id || e.child_id === "all")))
+            ) || null;
+
+          if (!homeEv) {
+            homeEv =
+              arr.find(
+                (e) =>
+                  e.child_id === childKey ||
+                  (childKey === "all" &&
+                    (!e.child_id || e.child_id === "all"))
+              ) || null;
+          }
+
+          if (!homeEv) {
+            homeEv =
+              arr.find((e) => !e.child_id || e.child_id === "all") || arr[0];
+          }
+
+          if (homeEv) {
+            setEventData({
+              title: homeEv.title || homeEv.name || "",
+              date: homeEv.date || homeEv.day || "",
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("events parse error", e);
+      }
+    }
+
+    const rawOld = localStorage.getItem("pocopoco_event");
+    if (rawOld) {
+      try {
+        const evt = JSON.parse(rawOld);
+        setEventData(evt);
+      } catch (e) {
+        console.warn("old event parse error", e);
+      }
+    }
+  }
+
+  // 週間ボードから、今日の縦1列を取得
+  function loadTodayTimetable(childId) {
+    const raw = localStorage.getItem(WEEKLY_STORAGE_KEY);
+    if (!raw) {
+      setTodaySlots(Array(PERIOD_COUNT).fill(""));
+      return;
+    }
+
+    try {
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== "object") {
+        setTodaySlots(Array(PERIOD_COUNT).fill(""));
+        return;
+      }
+
+      let cfg = childId && data[childId] ? data[childId] : null;
+      if (!cfg) {
+        const keys = Object.keys(data);
+        if (keys.length > 0) cfg = data[keys[0]];
+      }
+
+      if (!cfg || !cfg.cells) {
+        setTodaySlots(Array(PERIOD_COUNT).fill(""));
+        return;
+      }
+
+      const jsDay = new Date().getDay();
+      const dayKey = DAY_KEYS[jsDay];
+      const col = cfg.cells[dayKey] || [];
+
+      const slots = Array.from({ length: PERIOD_COUNT }).map(
+        (_, i) => col[i] || ""
+      );
+      setTodaySlots(slots);
+    } catch (e) {
+      console.warn("weekly timetable parse error", e);
+      setTodaySlots(Array(PERIOD_COUNT).fill(""));
+    }
+  }
+
+  const currentChildName =
+    children.find((c) => c.id === currentChildId)?.name || "";
+
+  const todayMinutes = Math.floor(todayTotalSec / 60);
+  const todaySeconds = todayTotalSec % 60;
+  const todayLabel = lang === "en" ? "Today" : "今日";
+
+  const today = new Date();
+  const isCurrentMonth =
+    today.getFullYear() === calendarYear &&
+    today.getMonth() + 1 === calendarMonth;
+
+  const firstDay = new Date(calendarYear, calendarMonth - 1, 1);
+  const firstWeekday = firstDay.getDay(); // 0=Sun
+
+  const firstDayOfWeek = calendarSettings.firstDayOfWeek; // 'sun' | 'mon'
+  const badges = calendarSettings.badges;
+
+  const headersSun = ["日", "月", "火", "水", "木", "金", "土"];
+  const headersMon = ["月", "火", "水", "木", "金", "土", "日"];
+  const headerLabels = firstDayOfWeek === "mon" ? headersMon : headersSun;
+
+  // 1行目の最初のセルに1日が来るインデックス
+  const startIndex =
+    firstDayOfWeek === "sun" ? firstWeekday : (firstWeekday + 6) % 7;
+
+  const lastDay = new Date(calendarYear, calendarMonth, 0).getDate();
+
+  const weeks = [];
+  let currentDay = 1 - startIndex;
+  while (currentDay <= lastDay) {
+    const week = [];
+    for (let i = 0; i < 7; i++) {
+      if (currentDay < 1 || currentDay > lastDay) {
+        week.push(null);
+      } else {
+        week.push(currentDay);
+      }
+      currentDay++;
+    }
+    weeks.push(week);
+  }
+
+  const monthLabel =
+    lang === "en"
+      ? `${calendarYear}/${calendarMonth}`
+      : `${calendarYear}年${calendarMonth}月`;
+
+  const childLabel = currentChildName || "pocoapoco";
+
+  return (
+    <main
+      style={{
+        padding: "20px 16px 80px",
+        maxWidth: "520px",
+        margin: "0 auto",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      {/* 子どもの名前 */}
+      <header style={{ marginBottom: "16px" }}>
+        <h1 style={{ fontSize: "20px", fontWeight: 600, marginBottom: "4px" }}>
+          {childLabel}
+        </h1>
+      </header>
+
+      {/* 上段：今日の合計＋イベント＋ミニカレンダー／今日の週間ボード */}
+      <section
+        style={{
+          display: "flex",
+          gap: "12px",
+          alignItems: "stretch",
+          marginBottom: "20px",
+          flexWrap: "wrap",
+        }}
+      >
+        {/* 左カラム */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+            flex: "0 0 220px",
+            maxWidth: "100%",
+          }}
+        >
+          {/* 今日の合計 */}
+          <section
+            style={{
+              background: "#f7f1ff",
+              border: "1px solid #e1d1ff",
+              borderRadius: "14px",
+              padding: "14px 14px 8px",
+            }}
+          >
+            <div style={{ fontSize: "13px", marginBottom: "6px" }}>
+              {t("todayPractice", lang)}
+            </div>
+            <div
+              style={{ display: "flex", alignItems: "baseline", gap: "12px" }}
+            >
+              <div style={{ fontSize: "30px", fontWeight: 700 }}>
+                {todayMinutes}:{todaySeconds.toString().padStart(2, "0")}
+              </div>
+              <div style={{ fontSize: "12px", color: "#666" }}>
+                {t("sessionsCount", lang)}
+                {todayTotalCount}
+              </div>
+            </div>
+          </section>
+
+          {/* イベント＋ミニカレンダー */}
+          <section
+            style={{
+              background: "#fffaf3",
+              border: "1px solid #ffe0b2",
+              borderRadius: "14px",
+              padding: "10px 10px 8px",
+              display: "flex",
+              flexDirection: "column",
+              flexGrow: 1,
+            }}
+          >
+            {/* nextEvent */}
+            {eventData && eventData.title ? (
+              <>
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: "#f57c00",
+                    marginBottom: "4px",
+                  }}
+                >
+                  {t("nextEvent", lang)}
+                </div>
+                <div style={{ fontSize: "14px", fontWeight: 600 }}>
+                  {eventData.title}
+                </div>
+                {eventData.date && (
+                  <div style={{ fontSize: "12px", marginBottom: "6px" }}>
+                    {eventData.date}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: "12px", marginBottom: "4px" }}>
+                  {t("noEventYetTitle", lang)}
+                </div>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#777",
+                    marginBottom: "6px",
+                  }}
+                >
+                  {t("noEventYetHint", lang)}
+                </div>
+              </>
+            )}
+
+            {/* ミニカレンダー（クリックでカレンダー画面へ） */}
+            <div
+              onClick={() => {
+                window.location.href = "/calendar";
+              }}
+              style={{
+                marginTop: "4px",
+                paddingTop: "6px",
+                borderTop: "1px solid #ffe0b2",
+                fontSize: "11px",
+                flexGrow: 1,
+                display: "flex",
+                flexDirection: "column",
+                cursor: "pointer",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "4px",
+                }}
+              >
+                <span>{monthLabel}</span>
+                <span style={{ fontSize: "10px", color: "#888" }}>
+                  （タップでカレンダーへ）
+                </span>
+              </div>
+              <table
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  tableLayout: "fixed",
+                  flexGrow: 1,
+                }}
+              >
+                <thead>
+                  <tr>
+                    {headerLabels.map((d) => (
+                      <th
+                        key={d}
+                        style={{
+                          fontWeight: 500,
+                          fontSize: "10px",
+                          paddingBottom: "2px",
+                          color:
+                            d === "日"
+                              ? "#f44336"
+                              : d === "土"
+                              ? "#3f51b5"
+                              : "#555",
+                        }}
+                      >
+                        {d}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {weeks.map((week, wi) => (
+                    <tr key={wi}>
+                      {week.map((day, di) => {
+                        if (!day) {
+                          return (
+                            <td
+                              key={di}
+                              style={{
+                                textAlign: "center",
+                                padding: "1px 0",
+                                fontSize: "10px",
+                                height: "18px",
+                              }}
+                            />
+                          );
+                        }
+
+                        const dateKey = `${calendarYear}-${String(
+                          calendarMonth
+                        ).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                        const secs = dailySeconds[dateKey] || 0;
+                        const mins = Math.floor(secs / 60);
+                        const icon = pickBadgeIcon(mins, badges);
+
+                        const isTodayCell =
+                          isCurrentMonth && day === today.getDate();
+
+                        return (
+                          <td
+                            key={di}
+                            style={{
+                              textAlign: "center",
+                              padding: "1px 0",
+                              fontSize: "10px",
+                              height: "18px",
+                            }}
+                          >
+                            <div
+                              style={{
+                                position: "relative",
+                                display: "inline-block",
+                                minWidth: "18px",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontSize: "10px",
+                                  padding: "1px 0",
+                                  borderRadius: "999px",
+                                  minWidth: "16px",
+                                  color: isTodayCell ? "#fff" : "#555",
+                                  backgroundColor: isTodayCell
+                                    ? "#ff80ab"
+                                    : "transparent",
+                                }}
+                              >
+                                {day}
+                              </div>
+                              {icon && (
+                                <div
+                                  style={{
+                                    position: "absolute",
+                                    top: "-3px",
+                                    right: "-6px",
+                                    fontSize: "10px",
+                                    opacity: 0.8,
+                                  }}
+                                >
+                                  {icon}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        {/* 右カラム：今日の週間ボード */}
+        <div
+          style={{
+            flex: "1 1 0",
+            minWidth: "180px",
+            backgroundColor: "#ffffff",
+            borderRadius: "14px",
+            padding: "12px 14px",
+            boxShadow: "0 4px 10px rgba(0,0,0,0.03)",
+            border: "1px solid #f3e8ff",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = "/weeklyboard";
+            }}
+            style={{
+              border: "none",
+              background: "none",
+              padding: 0,
+              margin: 0,
+              fontSize: "13px",
+              fontWeight: 600,
+              textAlign: "left",
+              cursor: "pointer",
+              marginBottom: "4px",
+            }}
+          >
+            {lang === "en" ? "Today’s WeeklyBoard" : "今日の週間ボード"}
+          </button>
+          <div
+            style={{
+              fontSize: "11px",
+              color: "#888",
+              marginBottom: "6px",
+            }}
+          >
+            {todayLabel}の予定です（週間ボードから編集できます）
+          </div>
+          <div
+            style={{
+              maxHeight: "260px",
+              overflowY: "auto",
+              paddingRight: "4px",
+            }}
+          >
+            {todaySlots.every((s) => !s) ? (
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "#aaa",
+                  padding: "4px 0",
+                }}
+              >
+                まだ登録がありません。週間ボードで時間割やToDoを追加できます。
+              </div>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                {todaySlots.map((slot, idx) => (
+                  <li
+                    key={idx}
+                    style={{
+                      fontSize: "12px",
+                      padding: "3px 0",
+                      borderBottom: "1px solid #f3f4f6",
+                      minHeight: "18px",
+                    }}
+                  >
+                    {slot || "　"}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* タスク一覧 */}
+      <section style={{ marginBottom: "20px" }}>
+        <h2 style={{ fontSize: "14px", fontWeight: 600, marginBottom: "8px" }}>
+          タスク
+        </h2>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {tasks.map((task) => {
+            const todaySec =
+              todayTaskSeconds[task.id] ?? todayTaskSeconds[task.label] ?? 0;
+            const totalSec =
+              totalTaskSeconds[task.id] ?? totalTaskSeconds[task.label] ?? 0;
+
+            const tmm = Math.floor(todaySec / 60);
+            const tss = todaySec % 60;
+
+            const amm = Math.floor(totalSec / 60);
+            const ass = totalSec % 60;
+
+            return (
+              <a
+                key={task.id}
+                href={`/record?task=${encodeURIComponent(
+                  task.label
+                )}&childId=${encodeURIComponent(
+                  currentChildId || ""
+                )}&autoStart=1`}
+                style={{
+                  display: "block",
+                  background: "#fff",
+                  border: "1px solid #eee",
+                  borderRadius: "12px",
+                  padding: "12px 10px",
+                  textDecoration: "none",
+                  color: "#333",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.03)",
+                }}
+              >
+                <div style={{ fontSize: "20px", marginBottom: "4px" }}>
+                  {task.icon || "🎵"}
+                </div>
+                <div style={{ fontSize: "13px", fontWeight: 600 }}>
+                  {task.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "#777",
+                    marginTop: "6px",
+                    display: "flex",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <span>
+                    {todayLabel} {tmm}:{tss.toString().padStart(2, "0")}
+                  </span>
+                  <span>
+                    総合計 {amm}:{ass.toString().padStart(2, "0")}
+                  </span>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      </section>
+    </main>
+  );
+}

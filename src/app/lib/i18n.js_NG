@@ -1,0 +1,262 @@
+// src/app/lib/i18n.js
+"use client";
+
+import { LS_LANG } from "@/app/constants";
+
+const DEFAULT_LANG = "ja_hira";
+
+// 翻訳テーブル
+const translations = {
+  ja: {
+    // 言語名
+    languageJapanese: "日本語",
+    languageJapaneseHira: "にほんごひらがな",
+    languageEnglish: "English",
+
+    // ───────── 設定画面 ─────────
+    settingsTitle: "設定",
+    settingsLang: "表示言語",
+    settingsSave: "保存",
+
+    currentModeLabel: "現在のモード",
+    currentModeValueParent: "親モード",
+    currentModeValueChild: "子モード",
+    switchToParentButton: "親モードにする",
+    switchToChildButton: "子モードにする",
+    parentModeReturn: "親モードにもどる",
+
+    parentSecretCode: "大人の秘密コード",
+    saveSecretCode: "秘密コードを保存",
+
+    childrenSectionTitle: "子どもの登録（5人まで）",
+    showThisChild: "この子を表示",
+    deleteButton: "削除",
+    nameLabel: "なまえ",
+    yearLabel: "年",
+    monthLabel: "月",
+    dayLabel: "日",
+
+    tasksSectionTitle: "タスクの設定",
+    calendarTaskReflect: "カレンダーに反映",
+    addButton: "追加",
+    addTaskButton: "タスクを追加",
+    violinLabel: "バイオリン",
+
+    badgeSettingsTitle: "カレンダーのバッジ設定",
+    badgeSettingsDescription:
+      "ホーム画面のミニカレンダーと「カレンダー」画面で、1日の練習時間に応じて表示するバッジを決めます。",
+    minutesOrMore: "分以上",
+    saveBadgeSettings: "バッジ設定を保存",
+
+    calendarEventsTitle: "カレンダーに表示させるイベント",
+    calendarEventsDescription:
+      "ここに追加したイベントはカレンダーに表示されます。子どもをえらんで登録できます。同じ子どもにつき1件だけ「ホームにも表示」をつけられます。",
+
+    everyoneEvents: "みんなのイベント",
+    displayOnChildHome: "この子のホームにも表示する",
+    eventName: "イベント名",
+    visibleToEveryone: "全員に表示",
+    shownIn: "に表示",
+
+    appInfoTitle: "アプリ情報",
+    updateDate: "更新日",
+    legalNotice: "法律上の表示",
+    termsOfService: "利用規約",
+    privacyPolicy: "プライバシーポリシー",
+    sctaDescription: "特定商取引法に基づく表記",
+    usageGuide: "つかいかたガイド",
+    instagramDescription:
+      "くわしい使い方や最新情報は Instagram @chocoonlabo で発信しています。",
+
+    badgeSettingsSavedStatus: "カレンダーのバッジ設定を保存しました。",
+
+    // プロンプトなど
+    parentCodePrompt: "おとなの4けたコードを入力してください",
+    parentCodeMismatch: "コードがちがいます"
+  },
+
+  ja_hira: {
+    // 言語名
+    languageJapanese: "にほんご",
+    languageJapaneseHira: "にほんごひらがな",
+    languageEnglish: "えいご",
+
+    // 設定画面
+    settingsTitle: "せってい",
+    settingsLang: "ひょうじげんご",
+    settingsSave: "ほぞん",
+
+    currentModeLabel: "げんざいのモード",
+    currentModeValueParent: "おやモード",
+    currentModeValueChild: "こモード",
+    switchToParentButton: "おやモードにする",
+    switchToChildButton: "こモードにする",
+    parentModeReturn: "おやモードにもどる",
+
+    parentSecretCode: "おとなの ひみつコード",
+    saveSecretCode: "ひみつコードを ほぞん",
+
+    childrenSectionTitle: "こどもの とうろく（5にんまで）",
+    showThisChild: "このこを ひょうじ",
+    deleteButton: "さくじょ",
+    nameLabel: "なまえ",
+    yearLabel: "ねん",
+    monthLabel: "がつ",
+    dayLabel: "にち",
+
+    tasksSectionTitle: "たすくの せってい",
+    calendarTaskReflect: "カレンダーに はんえい",
+    addButton: "ついか",
+    addTaskButton: "たすくを ついか",
+    violinLabel: "バイオリン",
+
+    badgeSettingsTitle: "カレンダーの バッジせってい",
+    badgeSettingsDescription:
+      "ホームがめんの ミニカレンダーと「カレンダー」がめんで、1にちの れんしゅうじかんに おうじて ひょうじする バッジを きめます。",
+    minutesOrMore: "ふんいじょう",
+    saveBadgeSettings: "バッジせっていを ほぞん",
+
+    calendarEventsTitle: "カレンダーに ひょうじする イベント",
+    calendarEventsDescription:
+      "ここに ついかした イベントは カレンダーに ひょうじされます。こどもを えらんで とうろくできます。同じ こどもに つき1けんだけ「ホームにも ひょうじ」を つけられます。",
+
+    everyoneEvents: "みんなの イベント",
+    displayOnChildHome: "このこの ホームにも ひょうじする",
+    eventName: "イベントめい",
+    visibleToEveryone: "ぜんいんに ひょうじ",
+    shownIn: "に ひょうじ",
+
+    appInfoTitle: "アプリじょうほう",
+    updateDate: "こうしんび",
+    legalNotice: "ほうりつじょうの ひょうじ",
+    termsOfService: "りようきやく",
+    privacyPolicy: "プライバシーポリシー",
+    sctaDescription: "とくてい しょうとりひきほうに もとづく ひょうき",
+    usageGuide: "つかいかた ガイド",
+    instagramDescription:
+      "くわしい つかいかたや さいしんじょうほうは Instagram @chocoonlabo で はっしんしています。",
+
+    badgeSettingsSavedStatus:
+      "カレンダーの バッジせっていを ほぞんしました。",
+
+    parentCodePrompt: "おとなの 4けたコードを にゅうりょくしてください",
+    parentCodeMismatch: "コードが ちがいます"
+  },
+
+  en: {
+    // language names
+    languageJapanese: "Japanese",
+    languageJapaneseHira: "Japanese (hiragana)",
+    languageEnglish: "English",
+
+    // settings screen
+    settingsTitle: "Settings",
+    settingsLang: "Language",
+    settingsSave: "Save",
+
+    currentModeLabel: "Current mode",
+    currentModeValueParent: "Parent mode",
+    currentModeValueChild: "Child mode",
+    switchToParentButton: "Switch to parent mode",
+    switchToChildButton: "Switch to child mode",
+    parentModeReturn: "Return to parent mode",
+
+    parentSecretCode: "Parent secret code",
+    saveSecretCode: "Save secret code",
+
+    childrenSectionTitle: "Children (up to 5)",
+    showThisChild: "Show this child",
+    deleteButton: "Delete",
+    nameLabel: "Name",
+    yearLabel: "Year",
+    monthLabel: "Month",
+    dayLabel: "Day",
+
+    tasksSectionTitle: "Task settings",
+    calendarTaskReflect: "Shown in calendar",
+    addButton: "Add",
+    addTaskButton: "Add task",
+    violinLabel: "Violin",
+
+    badgeSettingsTitle: "Badge settings",
+    badgeSettingsDescription:
+      'On the mini calendar on the home screen and on the "Calendar" screen, you can decide which badges to display depending on the amount of practice time per day.',
+    minutesOrMore: "minutes or more",
+    saveBadgeSettings: "Save badge settings",
+
+    calendarEventsTitle: "Events to display on the calendar",
+    calendarEventsDescription:
+      'Events added here will be displayed on the calendar. You can select a child to register. You can only set one event per child to "Show on Home."',
+
+    everyoneEvents: "Everyone\'s events",
+    displayOnChildHome: "Display on this child\'s home page",
+    eventName: "Event name",
+    visibleToEveryone: "Visible to everyone",
+    shownIn: "Shown in",
+
+    appInfoTitle: "App information",
+    updateDate: "Update date",
+    legalNotice: "Legal notice",
+    termsOfService: "Terms of service",
+    privacyPolicy: "Privacy policy",
+    sctaDescription:
+      "Description based on the Specified Commercial Transactions Act",
+    usageGuide: "Usage guide",
+    instagramDescription:
+      "Detailed instructions and the latest information can be found on Instagram @chocoonlabo.",
+
+    badgeSettingsSavedStatus: "Calendar badge settings have been saved.",
+
+    parentCodePrompt: "Please enter the 4-digit parent code.",
+    parentCodeMismatch: "The code does not match."
+  }
+};
+
+// 翻訳取得
+export function t(keyOrText, lang) {
+  const currentLang = lang || DEFAULT_LANG;
+  const table = translations[currentLang] || translations[DEFAULT_LANG];
+
+  // 1) キーとして一致する場合
+  if (table && Object.prototype.hasOwnProperty.call(table, keyOrText)) {
+    return table[keyOrText];
+  }
+
+  // 2) 翻訳テーブルにない場合は、そのまま返す
+  return keyOrText;
+}
+
+// 言語取得
+export function getLangFromStorage() {
+  if (typeof window === "undefined") return DEFAULT_LANG;
+
+  try {
+    const stored = window.localStorage.getItem(LS_LANG);
+    if (stored && translations[stored]) {
+      return stored;
+    }
+  } catch (e) {
+    console.warn("getLangFromStorage error", e);
+  }
+
+  return DEFAULT_LANG;
+}
+
+// 言語保存
+export function setLangToStorage(lang) {
+  if (typeof window === "undefined") return;
+  if (!translations[lang]) return;
+
+  try {
+    window.localStorage.setItem(LS_LANG, lang);
+  } catch (e) {
+    console.warn("setLangToStorage error", e);
+  }
+}
+
+// 言語選択用の一覧（必要なら利用）
+export const SUPPORTED_LANGS = [
+  { value: "ja", label: translations.ja.languageJapanese },
+  { value: "ja_hira", label: translations.ja_hira.languageJapaneseHira },
+  { value: "en", label: translations.en.languageEnglish }
+];

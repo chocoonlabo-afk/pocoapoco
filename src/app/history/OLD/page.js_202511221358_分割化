@@ -1,0 +1,1221 @@
+"use client";
+
+import { useEffect, useRef, useState, useMemo } from "react";
+import { LS_SONGS } from "../constants";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
+
+export default function HistoryPage() {
+  const [records, setRecords] = useState([]);
+  const [summary, setSummary] = useState({
+    totalMinutes: 0,
+    totalCount: 0,
+    todayCount: 0,
+  });
+  const [taskDict, setTaskDict] = useState({}); // task_id -> label
+  const [songsDict, setSongsDict] = useState({}); // song_id -> title
+
+  // 子ども一覧と、表示中の子
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("all");
+
+  // ロール（親 / 子）
+  const [role, setRole] = useState("parent");
+
+  // タスクフィルタ用
+  const [availableTasks, setAvailableTasks] = useState([]); // {id,label}[]
+  const [selectedTaskIds, setSelectedTaskIds] = useState([]); // key[]
+  const [isTaskSelectorOpen, setIsTaskSelectorOpen] = useState(false);
+
+  // 期間（日/週/月/すべて）
+  const [periodType, setPeriodType] = useState("month"); // "day" | "week" | "month" | "all"
+
+  // CSV入出力
+  const fileInputRef = useRef(null);
+
+  // 初期読み込み
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    loadTasksForNameResolve();
+    loadSongsForNameResolve();
+
+    // クエリパラメータ（childId, mode）
+    let childIdFromQuery = "";
+    let modeFromQuery = "";
+    try {
+      const params = new URLSearchParams(window.location.search);
+      childIdFromQuery = params.get("childId") || "";
+      modeFromQuery = params.get("mode") || "";
+    } catch {
+      /* ignore */
+    }
+
+    // 子ども一覧
+    let loadedChildren = [];
+    try {
+      const rawChildren = localStorage.getItem("pocopoco_children");
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) {
+          loadedChildren = arr;
+          setChildren(arr);
+        }
+      }
+    } catch (e) {
+      console.warn("failed to load children", e);
+    }
+
+    // ロール判定
+    let detectedRole = "parent";
+    try {
+      const savedRole = localStorage.getItem("pocopoco_role");
+      const savedMode = localStorage.getItem("pocopoco_mode");
+      if (
+        modeFromQuery === "child" ||
+        savedMode === "child" ||
+        savedRole === "child"
+      ) {
+        detectedRole = "child";
+      } else if (savedRole === "parent") {
+        detectedRole = "parent";
+      }
+      setRole(detectedRole);
+    } catch (e) {
+      console.warn("failed to load role", e);
+    }
+
+    // 現在の子ID（古いキーと新しいキー両方を見る）
+    let savedCurrentChild =
+      localStorage.getItem("pocopoco_current_child_id") ||
+      localStorage.getItem("pocopoco_currentChildId") ||
+      "";
+
+    if (detectedRole === "child") {
+      // 子モード：クエリ childId が有効ならそれを優先
+      if (
+        childIdFromQuery &&
+        childIdFromQuery !== "all" &&
+        loadedChildren.find((c) => c.id === childIdFromQuery)
+      ) {
+        savedCurrentChild = childIdFromQuery;
+      } else if (
+        (!savedCurrentChild || savedCurrentChild === "all") &&
+        loadedChildren.length > 0
+      ) {
+        savedCurrentChild = loadedChildren[0].id;
+      }
+      setCurrentChildId(savedCurrentChild || "");
+    } else {
+      // 親モード：クエリ childId が有効ならそれを優先、それ以外は all も許可
+      if (
+        childIdFromQuery &&
+        childIdFromQuery !== "all" &&
+        loadedChildren.find((c) => c.id === childIdFromQuery)
+      ) {
+        savedCurrentChild = childIdFromQuery;
+      }
+      setCurrentChildId(savedCurrentChild || "all");
+    }
+
+    loadHistory(savedCurrentChild || "all", detectedRole);
+  }, []);
+
+  // ※ 履歴画面では currentChildId を localStorage に保存しない
+  //   → 設定画面/ホーム側の「この子を表示」を上書きしないため
+
+  // 子 or records が変わったら今日のサマリーを再計算
+  useEffect(() => {
+    recalcSummaryForCurrentChild(records, currentChildId, role);
+  }, [records, currentChildId, role]);
+
+  // records or taskDict が変わったら、タスク候補を更新
+  useEffect(() => {
+    const { tasks } = collectAvailableTasks(records, taskDict);
+    setAvailableTasks(tasks);
+    if (selectedTaskIds.length === 0 && tasks.length > 0) {
+      // 初期は「すべて選択」
+      setSelectedTaskIds(tasks.map((t) => t.id));
+    }
+  }, [records, taskDict]);
+
+  // 設定画面で保存してあるタスクを読む（id→label）
+  function loadTasksForNameResolve() {
+    try {
+      const raw = localStorage.getItem("pocopoco_tasks");
+      if (!raw) return;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return;
+      const dict = {};
+      list.forEach((t) => {
+        if (t.id) {
+          dict[t.id] = t.label || t.name || t.id;
+        }
+      });
+      setTaskDict(dict);
+    } catch (e) {
+      console.warn("failed to load tasks for history name mapping", e);
+    }
+  }
+
+  // 曲データを読み込み（song_id → 曲名）
+  function loadSongsForNameResolve() {
+    try {
+      const raw = localStorage.getItem(LS_SONGS);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      const dict = {};
+
+      const addSong = (s) => {
+        if (!s || typeof s !== "object") return;
+        const id = s.id || s.song_id || s.songId;
+        if (!id) return;
+        const title =
+          s.title ||
+          s.name ||
+          s.label ||
+          s.song_title ||
+          s.songName ||
+          s.song_name;
+        if (!title) return;
+        dict[id] = title;
+      };
+
+      if (Array.isArray(data)) {
+        data.forEach(addSong);
+      } else if (data && typeof data === "object") {
+        Object.values(data).forEach((v) => {
+          if (Array.isArray(v)) {
+            v.forEach(addSong);
+          }
+        });
+      }
+
+      setSongsDict(dict);
+    } catch (e) {
+      console.warn("failed to load songs for history name mapping", e);
+    }
+  }
+
+  // localStorage から履歴を読み込み
+  function loadHistory(initialChildId, detectedRole) {
+    try {
+      const raw = localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return;
+      setRecords(data);
+      recalcSummaryForCurrentChild(
+        data,
+        initialChildId || currentChildId,
+        detectedRole || role
+      );
+    } catch (e) {
+      console.error("failed to load history", e);
+    }
+  }
+
+  // 子どもで絞り込んで合計時間・回数を集計（今日分のみ）
+  function recalcSummaryForCurrentChild(allRecords, targetChildId, currentRole) {
+    const today = new Date().toISOString().slice(0, 10);
+    const target = String(targetChildId ?? "");
+    const isChildRole = currentRole === "child";
+
+    const todayRecords = allRecords.filter((r) => {
+      const started = r.startedAt || "";
+      if (!started.startsWith(today)) return false;
+
+      const recordChildId = String(r.child_id ?? "");
+
+      // 子モードなら常に自分
+      if (isChildRole) {
+        if (!target || target === "all") return false;
+        return recordChildId === target;
+      }
+
+      // 親モード
+      if (target === "all" || !target) return true;
+      return recordChildId === target;
+    });
+
+    const totalSeconds = todayRecords.reduce(
+      (sum, r) => sum + (r.seconds || 0),
+      0
+    );
+    const totalCount = todayRecords.reduce(
+      (sum, r) => sum + (r.count || 0),
+      0
+    );
+
+    setSummary({
+      totalMinutes: Math.floor(totalSeconds / 60),
+      totalCount,
+      todayCount: todayRecords.length,
+    });
+  }
+
+  // 日付をきれいに表示
+  function formatDate(dateStr) {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleString("ja-JP", {
+        month: "long",
+        day: "numeric",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return dateStr;
+    }
+  }
+
+  // タスク名を複数パターンから取る
+  function getTaskTitle(record) {
+    if (record.task_title) return record.task_title; // 新
+    if (record.task) return record.task; // 旧
+    if (record.task_id && taskDict[record.task_id]) {
+      return taskDict[record.task_id];
+    }
+    return "タスク不明";
+  }
+
+  // 曲名を取得（履歴 or 曲マスタから）
+  function getSongTitle(record) {
+    if (!record) return "";
+    if (record.song_title) return record.song_title;
+    if (record.songTitle) return record.songTitle;
+    if (record.song_name) return record.song_name;
+
+    if (record.song_id && songsDict[record.song_id]) {
+      return songsDict[record.song_id];
+    }
+    if (record.songId && songsDict[record.songId]) {
+      return songsDict[record.songId];
+    }
+    return "";
+  }
+
+  // タスクキー（フィルタ用、一意にする）
+  function getTaskKey(record) {
+    if (record.task_id) return `id:${record.task_id}`;
+    if (record.task_title) return `title:${record.task_title}`;
+    if (record.task) return `name:${record.task}`;
+    return "unknown";
+  }
+
+  // availableTasks を作る
+  function collectAvailableTasks(allRecords, dict) {
+    const map = new Map(); // key -> label
+    allRecords.forEach((r) => {
+      const key = getTaskKey(r);
+      const label =
+        r.task_title || r.task || (r.task_id && dict[r.task_id]) || "タスク不明";
+      if (!map.has(key)) {
+        map.set(key, label);
+      }
+    });
+    const tasks = Array.from(map.entries()).map(([id, label]) => ({
+      id,
+      label,
+    }));
+    return { tasks };
+  }
+
+  // 親なら編集へ、子ならアラートだけ
+  function handleEditClick(absoluteIndex) {
+    if (role !== "parent") {
+      alert("このきろくの編集は おとなだけができます。");
+      return;
+    }
+    if (absoluteIndex == null || absoluteIndex < 0) return;
+    window.location.href = `/history/edit?id=${absoluteIndex}`;
+  }
+
+  // 今選択してる子どもで絞った履歴（ロール別）
+  const recordsByChild = useMemo(() => {
+    const current = String(currentChildId ?? "");
+    if (role === "child") {
+      if (!current || current === "all") return [];
+      return records.filter((r) => String(r.child_id ?? "") === current);
+    }
+    if (current === "all" || !current) return records;
+    return records.filter((r) => String(r.child_id ?? "") === current);
+  }, [records, currentChildId, role]);
+
+  // タスクフィルタを適用
+  const filteredRecords =
+    selectedTaskIds.length === 0
+      ? recordsByChild
+      : recordsByChild.filter((r) => selectedTaskIds.includes(getTaskKey(r)));
+
+  // レコード → 配列インデックスのマップ（O(n²) 回避用）
+  const recordIndexMap = useMemo(() => {
+    const map = new Map();
+    records.forEach((r, idx) => {
+      map.set(r, idx);
+    });
+    return map;
+  }, [records]);
+
+  // 表示用（新しい順）＋元配列の絶対インデックスを保持
+  const decoratedList = useMemo(() => {
+    const tmp = filteredRecords
+      .map((r) => {
+        const idx = recordIndexMap.get(r);
+        return { absoluteIndex: idx ?? -1, record: r };
+      })
+      .filter((item) => item.absoluteIndex !== -1)
+      .reverse();
+    return tmp;
+  }, [filteredRecords, recordIndexMap]);
+
+  // グラフ用データ
+  const chartData = useMemo(
+    () => buildChartData(filteredRecords, periodType),
+    [filteredRecords, periodType]
+  );
+
+  // CSV出力
+  function handleExportCsv() {
+    if (records.length === 0) {
+      alert("まだきろくがありません。");
+      return;
+    }
+
+    const header = [
+      "startedAt",
+      "child_id",
+      "task_id",
+      "task_title",
+      "seconds",
+      "count",
+      "memo",
+    ];
+    const lines = [header.join(",")];
+
+    records.forEach((r) => {
+      const row = [
+        r.startedAt || "",
+        r.child_id || "",
+        r.task_id || "",
+        (r.task_title || r.task || "").replace(/,/g, " "),
+        String(r.seconds || 0),
+        String(r.count || 0),
+        (r.memo || "").replace(/[\r\n,]/g, " "),
+      ];
+      lines.push(row.join(","));
+    });
+
+    // UTF-8 BOM を付ける（Excel文字化け対策）
+    const csv = "\uFEFF" + lines.join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "pocopoco_history.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // CSV取込
+  function handleImportClick() {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+      fileInputRef.current.click();
+    }
+  }
+
+  function handleImportChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result;
+      if (typeof text !== "string") return;
+
+      const imported = parseCsvToRecords(text);
+      if (imported.length === 0) {
+        alert("読み込みできるデータが見つかりませんでした。");
+        return;
+      }
+
+      const merged = [...records, ...imported];
+      merged.sort((a, b) => {
+        const da = new Date(a.startedAt || 0).getTime();
+        const db = new Date(b.startedAt || 0).getTime();
+        return da - db;
+      });
+
+      setRecords(merged);
+      try {
+        localStorage.setItem("pocopoco_history", JSON.stringify(merged));
+      } catch (err) {
+        console.error("failed to save imported history", err);
+      }
+
+      alert(`きろくを ${imported.length} 件 ついかしました。`);
+    };
+    reader.readAsText(file, "utf-8");
+  }
+
+  // 子どもIDから名前を引く小さいヘルパ
+  function renderChildNameFromId(childId, childrenList) {
+    const found = childrenList.find((c) => c.id === childId);
+    return found ? found.name : childId;
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily:
+          'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        padding: "24px 16px 80px",
+        maxWidth: "500px",
+        margin: "0 auto",
+        backgroundColor: "#f7f0ff",
+        minHeight: "100vh",
+        boxSizing: "border-box",
+      }}
+    >
+      <header style={{ marginBottom: "16px" }}>
+        {role === "child" && (
+          <p style={{ fontSize: "11px", color: "#c06", marginTop: "4px" }}>
+            ※ いまは「子モード」です。編集はできません。
+          </p>
+        )}
+      </header>
+
+      {/* 子ども切替 */}
+      {children.length > 0 && (
+        <div
+          style={{
+            marginBottom: "10px",
+            display: "flex",
+            gap: "6px",
+            flexWrap: "wrap",
+          }}
+        >
+          {role !== "child" ? (
+            <>
+              <button
+                onClick={() => setCurrentChildId("all")}
+                style={{
+                  border:
+                    currentChildId === "all"
+                      ? "1px solid #6a1b9a"
+                      : "1px solid #ccc",
+                  background: "#fff",
+                  borderRadius: "999px",
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                  color: currentChildId === "all" ? "#6a1b9a" : "#555",
+                }}
+              >
+                ぜんいん
+              </button>
+              {children.map((ch) => (
+                <button
+                  key={ch.id}
+                  onClick={() => setCurrentChildId(ch.id)}
+                  style={{
+                    border:
+                      currentChildId === ch.id
+                        ? "1px solid #6a1b9a"
+                        : "1px solid #ccc",
+                    background: "#fff",
+                    borderRadius: "999px",
+                    padding: "4px 10px",
+                    fontSize: "12px",
+                    color: currentChildId === ch.id ? "#6a1b9a" : "#555",
+                  }}
+                >
+                  {ch.name}
+                </button>
+              ))}
+            </>
+          ) : (
+            // 子モード：自分だけ表示（クリック不可）
+            children
+              .filter((ch) => String(ch.id) === String(currentChildId))
+              .map((ch) => (
+                <span
+                  key={ch.id}
+                  style={{
+                    border: "1px solid #6a1b9a",
+                    color: "#6a1b9a",
+                    backgroundColor: "#fff",
+                    borderRadius: "999px",
+                    padding: "4px 10px",
+                    fontSize: "12px",
+                  }}
+                >
+                  {ch.name}
+                </span>
+              ))
+          )}
+        </div>
+      )}
+
+      {/* フィルタ + CSV */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#faf5ff",
+          border: "1px solid #e0ccff",
+          padding: "10px 12px",
+          marginBottom: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+        }}
+      >
+        {/* 上段：タスク選択＋CSV */}
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+          }}
+        >
+          <button
+            onClick={() => setIsTaskSelectorOpen(true)}
+            style={{
+              flex: 1,
+              borderRadius: "999px",
+              border: "1px solid #6a1b9a",
+              padding: "4px 10px",
+              fontSize: "13px",
+              background: "#fff",
+              textAlign: "left",
+            }}
+          >
+            {selectedTaskIds.length === 0 ||
+            selectedTaskIds.length === availableTasks.length
+              ? "すべてのタスク"
+              : `${selectedTaskIds.length} 件のタスク`}
+          </button>
+
+          <div
+            style={{
+              display: "flex",
+              gap: "4px",
+              flexShrink: 0,
+            }}
+          >
+            <button
+              onClick={handleExportCsv}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #bbb",
+                padding: "4px 8px",
+                fontSize: "11px",
+                background: "#fff",
+              }}
+            >
+              CSV出力
+            </button>
+            <button
+              onClick={handleImportClick}
+              style={{
+                borderRadius: "999px",
+                border: "1px solid #bbb",
+                padding: "4px 8px",
+                fontSize: "11px",
+                background: "#fff",
+              }}
+            >
+              CSV取込
+            </button>
+          </div>
+        </div>
+
+        {/* 下段：期間ボタン */}
+        <div
+          style={{
+            display: "flex",
+            gap: "6px",
+            flexWrap: "wrap",
+          }}
+        >
+          {[
+            { id: "day", label: "日" },
+            { id: "week", label: "週" },
+            { id: "month", label: "月" },
+            { id: "all", label: "すべて" },
+          ].map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setPeriodType(p.id)}
+              style={{
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "12px",
+                border:
+                  periodType === p.id
+                    ? "1px solid #6a1b9a"
+                    : "1px solid #ccc",
+                background:
+                  periodType === p.id ? "rgba(106,27,154,0.08)" : "#fff",
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* グラフカード（縦棒） */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#fff",
+          border: "1px solid #eee",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.04)",
+          padding: "10px 12px 4px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3
+          style={{
+            fontSize: "14px",
+            marginBottom: "4px",
+            color: "#6a1b9a",
+          }}
+        >
+          グラフ
+        </h3>
+        <p style={{ fontSize: "11px", color: "#777", marginBottom: "8px" }}>
+          上のタスクと期間をえらぶと、合計練習時間のグラフが見られます。
+        </p>
+        <div style={{ width: "100%", height: 180 }}>
+          {chartData.length === 0 ? (
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#999",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+              }}
+            >
+              まだグラフにできる きろくがありません。
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData}>
+                {/* 紫系グラデーション */}
+                <defs>
+                  <linearGradient
+                    id="minutesPurple"
+                    x1="0"
+                    y1="0"
+                    x2="0"
+                    y2="1"
+                  >
+                    <stop offset="0%" stopColor="#ce93d8" />
+                    <stop offset="100%" stopColor="#6a1b9a" />
+                  </linearGradient>
+                </defs>
+
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 10 }}
+                  interval={0}
+                  height={30}
+                />
+                <YAxis
+                  tick={{ fontSize: 10 }}
+                  width={32}
+                  tickFormatter={(v) => `${v}分`}
+                />
+                <Tooltip
+                  formatter={(value) => [`${value} 分`, "合計時間"]}
+                  labelFormatter={(label) => label}
+                />
+                <Bar
+                  dataKey="minutes"
+                  fill="url(#minutesPurple)"
+                  radius={[4, 4, 0, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </section>
+
+      {/* 今日のサマリー */}
+      <section
+        style={{
+          background:
+            "linear-gradient(135deg, rgba(240,230,255,0.9), rgba(230,245,255,0.8))",
+          border: "1px solid #e0ccff",
+          borderRadius: "12px",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+          padding: "16px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3
+          style={{
+            fontSize: "16px",
+            marginBottom: "8px",
+            color: "#6a1b9a",
+          }}
+        >
+          きょうのまとめ
+        </h3>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          合計時間：<strong>{summary.totalMinutes}</strong>分
+        </p>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          合計回数：<strong>{summary.totalCount}</strong>回
+        </p>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          けんすう：<strong>{summary.todayCount}</strong>件
+        </p>
+      </section>
+
+      {/* 履歴一覧 */}
+      <section>
+        <h3
+          style={{
+            fontSize: "16px",
+            marginBottom: "12px",
+            color: "#6a1b9a",
+          }}
+        >
+          {role === "child"
+            ? "じぶんのきろく"
+            : currentChildId === "all"
+            ? "ぜんたいのきろく"
+            : "この子のきろく"}
+        </h3>
+
+        {decoratedList.length === 0 ? (
+          <p style={{ fontSize: "14px", color: "#777" }}>
+            まだきろくがありません。
+          </p>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
+            {decoratedList.map(({ absoluteIndex, record }) => {
+              const taskTitle = getTaskTitle(record);
+              const songTitle = getSongTitle(record);
+              const minutes = Math.floor((record.seconds || 0) / 60);
+
+              return (
+                <div
+                  key={absoluteIndex}
+                  style={{
+                    border: "1px solid #ddd",
+                    borderRadius: "10px",
+                    backgroundColor: "#fff",
+                    padding: "12px",
+                    boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    columnGap: "8px",
+                  }}
+                >
+                  {/* 左側：内容 */}
+                  <div
+                    style={{
+                      fontSize: "13px",
+                      lineHeight: 1.4,
+                      color: "#333",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "13px",
+                        color: "#999",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      {formatDate(record.startedAt)}
+                    </div>
+
+                    {role !== "child" &&
+                      currentChildId === "all" &&
+                      record.child_id && (
+                        <div
+                          style={{
+                            fontSize: "11px",
+                            color: "#6a1b9a",
+                            marginBottom: "2px",
+                          }}
+                        >
+                          {renderChildNameFromId(record.child_id, children)}
+                        </div>
+                      )}
+
+                    {songTitle && (
+                      <div
+                        style={{
+                          fontSize: "13px",
+                          color: "#555",
+                          marginBottom: "2px",
+                        }}
+                      >
+                        ♪ {songTitle}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        fontSize: "15px",
+                        fontWeight: "600",
+                        color: "#4a148c",
+                      }}
+                    >
+                      {taskTitle}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        color: "#333",
+                      }}
+                    >
+                      ⏱ {minutes}分 ／ 🎯 {record.count || 0}回
+                    </div>
+
+                    {record.memo && (
+                      <div
+                        style={{
+                          marginTop: "6px",
+                          fontSize: "13px",
+                          color: "#555",
+                          background: "#fafafa",
+                          borderRadius: "6px",
+                          padding: "6px 8px",
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        📝 {record.memo}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 右側：編集ボタン（親だけ） */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "flex-start",
+                      alignItems: "flex-end",
+                    }}
+                  >
+                    {role === "parent" && (
+                      <button
+                        onClick={() => handleEditClick(absoluteIndex)}
+                        style={{
+                          backgroundColor: "#6a1b9a",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "8px",
+                          padding: "8px 10px",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          lineHeight: 1.2,
+                          minWidth: "60px",
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
+                        }}
+                      >
+                        編集
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* 戻るボタン（共通で表示） */}
+      <div style={{ marginTop: "24px", textAlign: "center" }}>
+        <button
+          onClick={() => (window.location.href = "/")}
+          style={{
+            backgroundColor: "#6a1b9a",
+            color: "#fff",
+            border: "none",
+            borderRadius: "8px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "10px 20px",
+          }}
+        >
+          ホームにもどる
+        </button>
+      </div>
+
+      {/* CSV入力用 hidden input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        style={{ display: "none" }}
+        onChange={handleImportChange}
+      />
+
+      {/* タスク選択モーダル */}
+      {isTaskSelectorOpen && (
+        <div
+          onClick={() => setIsTaskSelectorOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            zIndex: 50,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "90%",
+              maxWidth: "420px",
+              maxHeight: "70vh",
+              background: "#fff",
+              borderRadius: "12px",
+              padding: "14px 16px",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            <h4
+              style={{
+                fontSize: "15px",
+                marginBottom: "4px",
+                color: "#4a148c",
+              }}
+            >
+              タスクをえらぶ
+            </h4>
+            <p style={{ fontSize: "12px", color: "#777" }}>
+              みたいタスクにチェックを入れてください（複数選択できます）。
+            </p>
+
+            <div
+              style={{
+                flex: 1,
+                overflowY: "auto",
+                marginTop: "4px",
+                paddingRight: "4px",
+              }}
+            >
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "13px",
+                  padding: "4px 0",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={
+                    selectedTaskIds.length === availableTasks.length ||
+                    selectedTaskIds.length === 0
+                  }
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedTaskIds(availableTasks.map((t) => t.id));
+                    } else {
+                      setSelectedTaskIds([]);
+                    }
+                  }}
+                />
+                <span>すべて選択 / 解除</span>
+              </label>
+              <hr style={{ border: "none", borderTop: "1px solid #eee" }} />
+              {availableTasks.map((t) => (
+                <label
+                  key={t.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    fontSize: "13px",
+                    padding: "4px 0",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={
+                      selectedTaskIds.length === 0 ||
+                      selectedTaskIds.includes(t.id)
+                    }
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedTaskIds((prev) =>
+                          prev.includes(t.id) ? prev : [...prev, t.id]
+                        );
+                      } else {
+                        setSelectedTaskIds((prev) =>
+                          prev.filter((id) => id !== t.id)
+                        );
+                      }
+                    }}
+                  />
+                  <span>{t.label}</span>
+                </label>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: "8px",
+                marginTop: "8px",
+              }}
+            >
+              <button
+                onClick={() => setIsTaskSelectorOpen(false)}
+                style={{
+                  borderRadius: "8px",
+                  border: "1px solid #ccc",
+                  padding: "6px 12px",
+                  fontSize: "13px",
+                  background: "#fff",
+                }}
+              >
+                とじる
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+// グラフ用データ作成
+function buildChartData(records, periodType) {
+  if (!Array.isArray(records) || records.length === 0) return [];
+
+  const map = new Map(); // key -> { label, seconds }
+
+  records.forEach((r) => {
+    if (!r.startedAt) return;
+    const d = new Date(r.startedAt);
+    if (Number.isNaN(d.getTime())) return;
+
+    let key = "";
+    let label = "";
+
+    const yyyy = d.getFullYear();
+    const mm = d.getMonth() + 1;
+    const dd = d.getDate();
+
+    if (periodType === "day") {
+      key = d.toISOString().slice(0, 10); // YYYY-MM-DD
+      label = `${mm}/${dd}`;
+    } else if (periodType === "week") {
+      const weekStart = getMonday(d);
+      const wmm = weekStart.getMonth() + 1;
+      const wdd = weekStart.getDate();
+      key = `W-${weekStart.toISOString().slice(0, 10)}`;
+      label = `${wmm}/${wdd}週`;
+    } else {
+      // "month" or "all"
+      key = `${yyyy}-${String(mm).padStart(2, "0")}`;
+      label = `${yyyy}/${mm}`;
+    }
+
+    const before = map.get(key) || { label, seconds: 0 };
+    before.seconds += r.seconds || 0;
+    map.set(key, before);
+  });
+
+  return Array.from(map.entries())
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([_, v]) => ({
+      label: v.label,
+      minutes: Math.round(v.seconds / 60),
+    }));
+}
+
+// その週の月曜日（週集計用）
+function getMonday(date) {
+  const d = new Date(date);
+  const day = d.getDay(); // 0:日
+  const diff = (day + 6) % 7; // 月曜=0
+  d.setDate(d.getDate() - diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// CSV → record[]
+function parseCsvToRecords(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim() !== "");
+  if (lines.length === 0) return [];
+
+  const [headerLine, ...dataLines] = lines;
+  const headers = headerLine.split(",").map((h) => h.trim());
+
+  const idxStartedAt = headers.indexOf("startedAt");
+  const idxChildId = headers.indexOf("child_id");
+  const idxTaskId = headers.indexOf("task_id");
+  const idxTaskTitle = headers.indexOf("task_title");
+  const idxSeconds = headers.indexOf("seconds");
+  const idxCount = headers.indexOf("count");
+  const idxMemo = headers.indexOf("memo");
+
+  if (idxStartedAt === -1) {
+    // ヘッダなしとして全行をデータ扱い（簡易）
+    return dataLines.map((line) => {
+      const cols = line.split(",");
+      return {
+        startedAt: cols[0] || "",
+        child_id: cols[1] || "",
+        task_id: cols[2] || "",
+        task_title: cols[3] || "",
+        seconds: Number(cols[4] || "0") || 0,
+        count: Number(cols[5] || "0") || 0,
+        memo: cols[6] || "",
+      };
+    });
+  }
+
+  return dataLines.map((line) => {
+    const cols = line.split(",");
+    return {
+      startedAt: cols[idxStartedAt] || "",
+      child_id: idxChildId >= 0 ? cols[idxChildId] || "" : "",
+      task_id: idxTaskId >= 0 ? cols[idxTaskId] || "" : "",
+      task_title: idxTaskTitle >= 0 ? cols[idxTaskTitle] || "" : "",
+      seconds:
+        idxSeconds >= 0 ? Number(cols[idxSeconds] || "0") || 0 : 0,
+      count: idxCount >= 0 ? Number(cols[idxCount] || "0") || 0 : 0,
+      memo: idxMemo >= 0 ? cols[idxMemo] || "" : "",
+    };
+  });
+}

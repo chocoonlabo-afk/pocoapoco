@@ -1,0 +1,378 @@
+// src/app/lib/i18n.js
+"use client";
+
+// -----------------------------------------
+// 言語設定と辞書
+// -----------------------------------------
+export const SUPPORTED_LANGS = ["jp", "hiragana", "en"];
+const STORAGE_KEY = "pocopoco_lang";
+
+// -----------------------------------------
+// 共通辞書
+// -----------------------------------------
+const dict = {
+  // ホームまわり
+  todayLabel: {
+    jp: "今日の練習成果",
+    hiragana: "れんしゅうせいか",
+    en: "Today's Practice",
+  },
+  minutesSuffix: {
+    jp: "分",
+    hiragana: "ふん",
+    en: "min",
+  },
+  sessionsCount: {
+    jp: "記録：",
+    hiragana: "きろく：",
+    en: "sessions:",
+  },
+  limitPerDay: {
+    jp: " 件",
+    hiragana: " けん",
+    en: "",
+  },
+  nextEventCardTitle: {
+    jp: "次のイベント",
+    hiragana: "つぎの いべんと",
+    en: "Next event",
+  },
+  noEventYetTitle: {
+    jp: "イベントは まだ ありません",
+    hiragana: "いべんとは まだ ありません",
+    en: "No event yet",
+  },
+    // --- ホーム画面専用 追加分 ---
+
+  homeCalendarLink: {
+    jp: "カレンダー画面へ",
+    hiragana: "カレンダーがめんへ",
+    en: "Open Calendar",
+  },
+  homeTaskSectionTitle: {
+    jp: "タスク",
+    hiragana: "タスク",
+    en: "Tasks",
+  },
+  todayShort: {
+    jp: "今日",
+    hiragana: "きょう",
+    en: "Today",
+  },
+  totalLabel: {
+    jp: "総合計",
+    hiragana: "ごうけい",
+    en: "Total",
+  },
+  weeklyBoardTitle: {
+    jp: "今日の週間ボード",
+    hiragana: "きょうのボード",
+    en: "Today's WeeklyBoard",
+  },
+  weeklyBoardEmptyHint: {
+    jp: "まだ登録がありません。週間ボードで時間割やToDoを追加できます。",
+    hiragana: "まだとうろくがありません。しゅうかんボードで じかんわりや ToDo を ついかできます。",
+    en: "You can add timetables, to-dos, etc. on the weekly board.",
+  },
+  // 表示テキストはナシにするが、スクリーンリーダー用に残す
+ 
+
+  noEventYetHint: {
+    jp: "設定画面で イベントを 入力すると ここに 表示されます。",
+    hiragana: "せっていがめんで いべんとを いれると ここに でます。",
+    en: "Add an event in Settings to show it here.",
+  },
+  daysLeftSuffix: {
+    jp: "日 後 本番",
+    hiragana: "にち ご ほんばん",
+    en: "days to go",
+  },
+  practiceMenuTitle: {
+    jp: "練習メニュー",
+    hiragana: "れんしゅう めにゅー",
+    en: "Practice menu",
+  },
+  tapToRecord: {
+    jp: "タップで 記録",
+    hiragana: "たっぷで きろく",
+    en: "Tap to record",
+  },
+  badgeBronze: {
+    jp: "15分がんばった！",
+    hiragana: "15ふん がんばった！",
+    en: "15 min done!",
+  },
+  badgeSilver: {
+    jp: "30分すごい！",
+    hiragana: "30ふん すごい！",
+    en: "30 min, great!",
+  },
+  badgeGold: {
+    jp: "60分えらい！",
+    hiragana: "60ふん えらい！",
+    en: "60 min, amazing!",
+  },
+  // -------------------------------
+  // 記録画面まわり
+  // -------------------------------
+  recordSongLabel: {
+    jp: "曲",
+    hiragana: "きょく",
+    en: "Songs",
+  },
+  recordOpenSongsList: {
+    jp: "曲リストをひらく",
+    hiragana: "きょくリストをひらく",
+    en: "Open the Songs list",
+  },
+  recordNoSongSelected: {
+    jp: "曲を選ばない",
+    hiragana: "きょくをえらばない",
+    // スペルを少しだけ自然に直しています
+    en: "I don't choose this song",
+  },
+  recordTimeLabel: {
+    jp: "時間",
+    hiragana: "じかん",
+    en: "Times",
+  },
+  recordEndPractice: {
+    jp: "練習おわり",
+    hiragana: "れんしゅうおわり",
+    en: "End of practice",
+  },
+  recordCountLabel: {
+    jp: "回数",
+    hiragana: "かいすう",
+    en: "Number of times",
+  },
+  recordCountButton: {
+    jp: "カウントする",
+    hiragana: "かぞえる",
+    en: "Count",
+  },
+  recordMemoLabel: {
+    jp: "メモ",
+    hiragana: "メモ",
+    en: "MEMO",
+  },
+  recordMemoPlaceholder: {
+    jp: "頑張ったことと、注意点などを記載できます",
+    hiragana: "がんばったことと や、きをつけることを かいてね",
+    en: "You can write down what you did well, what you should pay attention to, etc.",
+  },
+  recordSaveButton: {
+    jp: "保存",
+    hiragana: "ほぞん",
+    en: "Save",
+  },
+  recordSavedMessage: {
+    jp: "記録しました。お疲れ様でした！",
+    hiragana: "きろくしました。がんばったね！",
+    en: "Saved. You did your best!",
+  },
+  // -------------------------------
+  // 履歴画面まわり
+  // -------------------------------
+  historyAllTasks: {
+    jp: "すべてのタスク",
+    hiragana: "すべてのタスク",
+    en: "All",
+  },
+  historyDay: {
+    jp: "日",
+    hiragana: "にち",
+    en: "day",
+  },
+  historyWeek: {
+    jp: "週",
+    hiragana: "しゅう",
+    en: "week",
+  },
+  historyMonth: {
+    jp: "月",
+    hiragana: "つき",
+    en: "month",
+  },
+  historyAllRange: {
+    jp: "すべて",
+    hiragana: "すべて",
+    en: "All",
+  },
+  historyCsvExport: {
+    jp: "CSV出力",
+    hiragana: "CSVしゅつりょく",
+    en: "output",
+  },
+  historyCsvImport: {
+    jp: "CSV取込",
+    hiragana: "CSVとりこみ",
+    en: "import",
+  },
+  historyChartTitle: {
+    jp: "グラフ",
+    hiragana: "グラフ",
+    en: "Chart",
+  },
+  historyChartDescription: {
+    jp: "上のタスクと期間をえらぶと、合計練習時間のグラフが見られます。",
+    hiragana:
+      "タスクと きかんを えらぶと、ごうけい れんしゅうじかんのグラフが みられるよ",
+    en: "Select the task and period above to view a graph of your total practice time.",
+  },
+  historyMinutesUnit: {
+    jp: "分",
+    hiragana: "ふん",
+    en: "minutes",
+  },
+  historyTodaySummary: {
+    jp: "今日のまとめ",
+    hiragana: "きょうのまとめ",
+    en: "Today's summary",
+  },
+  historyTotalTime: {
+    jp: "合計時間",
+    hiragana: "ごうけいじかん",
+    en: "total time",
+  },
+  historyTotalCounts: {
+    jp: "合計回数",
+    hiragana: "ごうけいかいすう",
+    en: "total counts",
+  },
+  historyItemsCount: {
+    jp: "件数",
+    hiragana: "けんすう",
+    en: "items",
+  },
+  historyTimesUnit: {
+    jp: "回",
+    hiragana: "かい",
+    en: "times",
+  },
+  historyItemUnit: {
+    jp: "件",
+    hiragana: "けん",
+    en: "item",
+  },
+  historyChildRecordTitle: {
+    jp: "この子の記録",
+    hiragana: "このこのきろく",
+    en: "This child's record",
+  },
+  // 編集ボタンはアイコンのみ表示にするので、スクリーンリーダー用のラベルだけ
+  historyEditAria: {
+    jp: "この記録を編集",
+    hiragana: "このきろくを へんしゅう",
+    en: "Edit this record",
+  },
+
+  // -------------------------------
+  // 設定画面まわり（今回の修正版）
+  // -------------------------------
+  settingsTitle: {
+    jp: "設定",
+    hiragana: "せってい",
+    en: "Settings",
+  },
+  childrenSectionTitle: {
+    jp: "子どもの登録（5人まで）",
+    hiragana: "こどもの とうろく（5にんまで）",
+    en: "Children (up to 5)",
+  },
+  addButton: {
+    jp: "追加",
+    hiragana: "ついか",
+    en: "Add",
+  },
+  settingsLang: {
+    jp: "表示言語",
+    hiragana: "ひょうじげんご",
+    en: "Language",
+  },
+  settingsSave: {
+    jp: "保存",
+    hiragana: "ほぞん",
+    en: "Save",
+  },
+  parentSecretCode: {
+    jp: "大人の秘密コード（4桁）",
+    hiragana: "おとなの ひみつこーど（4けた）",
+    en: "Parent secret code (4 digits)",
+  },
+  tasksSectionTitle: {
+    jp: "タスクの設定",
+    hiragana: "たすくの せってい",
+    en: "Task settings",
+  },
+  dataBackupTitle: {
+    jp: "データのバックアップ / 引越し",
+    hiragana: "でーたの ばっくあっぷ / ひっこし",
+    en: "Backup / migrate data",
+  },
+
+  // ログイン
+  loginTitle: {
+    jp: "pocopoco にログインする",
+    hiragana: "pocopoco に ろぐいんする",
+    en: "Sign in to pocopoco",
+  },
+  loginParent: {
+    jp: "保護者としてログインする",
+    hiragana: "ほごしゃ として ろぐいんする",
+    en: "Enter as parent",
+  },
+  loginChild: {
+    jp: "子どもとしてログインする",
+    hiragana: "こども として ろぐいんする",
+    en: "Enter as child",
+  },
+};
+
+// -----------------------------------------
+// 言語取得・保存
+// -----------------------------------------
+export function getLangFromStorage() {
+  if (typeof window === "undefined") return "jp";
+  const saved = window.localStorage.getItem(STORAGE_KEY);
+  if (saved && SUPPORTED_LANGS.includes(saved)) return saved;
+  return "jp";
+}
+
+export function setLangToStorage(lang) {
+  if (typeof window === "undefined") return;
+  const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "jp";
+  try {
+    window.localStorage.setItem(STORAGE_KEY, useLang);
+  } catch (e) {
+    console.error("Failed to save language:", e);
+  }
+}
+
+// -----------------------------------------
+// 翻訳関数
+// -----------------------------------------
+export function t(key, lang) {
+  const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "jp";
+  const entry = dict[key];
+  if (!entry) return key;
+  return entry[useLang] ?? entry["jp"] ?? key;
+}
+
+// -----------------------------------------
+// 辞書追加ヘルパー
+// -----------------------------------------
+export function addTranslations(newDict) {
+  Object.keys(newDict).forEach((k) => {
+    dict[k] = { ...(dict[k] || {}), ...newDict[k] };
+  });
+}
+
+// -----------------------------------------
+export default {
+  SUPPORTED_LANGS,
+  getLangFromStorage,
+  setLangToStorage,
+  t,
+  addTranslations,
+};

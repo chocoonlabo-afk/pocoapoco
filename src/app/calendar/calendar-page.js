@@ -1,0 +1,706 @@
+// src/app/calendar/page.js
+"use client";
+
+import { useEffect, useState } from "react";
+
+// YYYY-MM-DD にする
+function toDayKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+// カレンダーセルを作る
+function buildCalendarCells(year, month) {
+  const first = new Date(year, month, 1);
+  const startWeekday = first.getDay();
+  const lastDate = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= lastDate; d++) {
+    cells.push(new Date(year, month, d));
+  }
+  return cells;
+}
+
+// 分数に応じて色を決める（設定画面と連動）
+
+const CALENDAR_SETTINGS_KEY = "pocoapoco_calendar_settings";
+
+const DEFAULT_BADGES = [
+  { id: "level1", name: "少しでも練習した日", minMinutes: 1, icon: "🌸" },
+  { id: "level2", name: "たくさん練習（銅）", minMinutes: 30, icon: "🥉" },
+  { id: "level3", name: "もっとたくさん（銀）", minMinutes: 60, icon: "🥈" },
+  { id: "level4", name: "すごくがんばった（金）", minMinutes: 90, icon: "🥇" },
+];
+
+function loadCalendarSettingsFromStorage() {
+  let badges = DEFAULT_BADGES;
+  try {
+    const raw = localStorage.getItem(CALENDAR_SETTINGS_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && Array.isArray(data.badges) && data.badges.length > 0) {
+        badges = DEFAULT_BADGES.map((def) => {
+          const found = data.badges.find((b) => b.id === def.id);
+          return found ? { ...def, ...found } : def;
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("calendar settings parse error", e);
+  }
+  return badges;
+}
+
+// 分数に応じて色とアイコンを決める
+function getBadgeFromSettings(minutes, badges) {
+  if (minutes <= 0) {
+    return {
+      bg: "#fff",
+      border: "#ddd",
+      text: "#999",
+      label: "",
+    };
+  }
+
+  const sorted = [...badges].sort((a, b) => a.minMinutes - b.minMinutes);
+  let levelIndex = -1;
+  let label = "";
+  sorted.forEach((b, idx) => {
+    if (minutes >= (Number(b.minMinutes) || 0)) {
+      levelIndex = idx;
+      label = b.icon || "";
+    }
+  });
+
+  if (levelIndex === -1) {
+    return {
+      bg: "#eef4ff",
+      border: "#aac0ff",
+      text: "#001a66",
+      label,
+    };
+  }
+
+  const colorLevels = [
+    { bg: "#eef4ff", border: "#aac0ff", text: "#001a66" },
+    { bg: "#e9ffe9", border: "#a8e4a8", text: "#045704" },
+    { bg: "#fff4d9", border: "#ffcd73", text: "#6d4c00" },
+    { bg: "#ffe7e7", border: "#ff9f9f", text: "#a00000" },
+  ];
+  const color =
+    colorLevels[Math.min(levelIndex, colorLevels.length - 1)] || colorLevels[0];
+
+  return {
+    ...color,
+    label,
+  };
+}
+
+// 複数イベントを読む（旧キーも吸い込む）
+function loadEvents() {
+  // 新
+  try {
+    const raw = localStorage.getItem("pocopoco_events");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr;
+    }
+  } catch (e) {
+    console.warn("pocopoco_events parse error", e);
+  }
+
+  // 旧：単体イベント
+  try {
+    const rawSingle = localStorage.getItem("pocopoco_event");
+    if (rawSingle) {
+      const s = JSON.parse(rawSingle);
+      if (s && (s.title || s.date)) {
+        return [
+          {
+            id: "legacy_single",
+            title: s.title || "イベント",
+            date: s.date || "",
+            mark: "★",
+            home: true,
+            child_id: "all",
+          },
+        ];
+      }
+    }
+  } catch (e) {
+    console.warn("pocopoco_event parse error", e);
+  }
+
+  return [];
+}
+
+// タスクフィルタ（カレンダーに反映するタスク）
+function loadCalendarTaskFilter() {
+  try {
+    const raw = localStorage.getItem(LS_CALENDAR_TASK_FILTER);
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return null;
+    return arr;
+  } catch {
+    return null;
+  }
+}
+
+// タスク一覧を読む（名前からid推測用）
+function loadTasksDict() {
+  try {
+    const raw = localStorage.getItem("pocopoco_tasks");
+    if (!raw) return { byId: {}, byLabel: {} };
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return { byId: {}, byLabel: {} };
+    const byId = {};
+    const byLabel = {};
+    arr.forEach((t) => {
+      if (t.id) byId[t.id] = t;
+      const label = (t.label || "").trim().toLowerCase();
+      if (label) byLabel[label] = t;
+    });
+    return { byId, byLabel };
+  } catch {
+    return { byId: {}, byLabel: {} };
+  }
+}
+
+// 誕生日（親の誕生日／または誰かの誕生日）を読む
+function loadBirthday() {
+  try {
+    const raw = localStorage.getItem("pocopoco_birthday");
+    if (!raw) return "";
+    return raw;
+  } catch {
+    return "";
+  }
+}
+
+// 日付キーが誕生日かどうか
+function isBirthdayDay(dateObj, birthdayStr) {
+  if (!birthdayStr) return false;
+  const [y, m, d] = birthdayStr.split("-");
+  if (!m || !d) return false;
+  const mm = String(dateObj.getMonth() + 1).padStart(2, "0");
+  const dd = String(dateObj.getDate()).padStart(2, "0");
+  return mm === m && dd === d;
+}
+
+// 指定の子に見えるイベントだけ返す
+function filterEventsForChild(events, childId) {
+  return events.filter((ev) => isEventVisibleForChild(ev, childId));
+}
+
+// 日別の合計分を計算（タスクフィルタ＋子どもフィルタあり）
+function calcDailyMinutes(historyArr, filterIds, tasksById, tasksByLabel, childId) {
+  const map = {};
+
+  const hasFilter = Array.isArray(filterIds) && filterIds.length > 0;
+  const hasChildFilter = !!childId && childId !== "all";
+
+  for (const rec of historyArr) {
+    // 子どもフィルタ
+    if (hasChildFilter && rec.child_id && rec.child_id !== childId) {
+      continue;
+    }
+
+    const dayKey = rec.startedAt ? rec.startedAt.slice(0, 10) : rec.date;
+    if (!dayKey) continue;
+    const sec = rec.seconds ?? rec.duration ?? 0;
+
+    // タスクフィルタなし
+    if (!hasFilter) {
+      map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+      continue;
+    }
+
+    // task_id で一致
+    if (rec.task_id && filterIds.includes(rec.task_id)) {
+      map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+      continue;
+    }
+
+    // task_title からidを推測
+    if (rec.task_title) {
+      const lc = rec.task_title.trim().toLowerCase();
+      const t = tasksByLabel[lc];
+      if (t && filterIds.includes(t.id)) {
+        map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+        continue;
+      }
+    }
+
+    // 古い形式 task からidを推測
+    if (rec.task) {
+      const lc = rec.task.trim().toLowerCase();
+      const t = tasksByLabel[lc];
+      if (t && filterIds.includes(t.id)) {
+        map[dayKey] = (map[dayKey] || 0) + Math.floor(sec / 60);
+        continue;
+      }
+    }
+  }
+
+  return map;
+}
+
+export default function CalendarPage() {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [month, setMonth] = useState(() => new Date().getMonth());
+  const [dailyMinutes, setDailyMinutes] = useState({});
+  const [events, setEvents] = useState([]);
+  const [birthday, setBirthday] = useState("");
+  const [calendarTaskFilter, setCalendarTaskFilter] = useState(null);
+  const [tasksDict, setTasksDict] = useState({ byId: {}, byLabel: {} });
+  const [children, setChildren] = useState([]);
+  const [selectedChildId, setSelectedChildId] = useState("all");
+  const [history, setHistory] = useState([]);
+  const [calendarBadges, setCalendarBadges] = useState(DEFAULT_BADGES);
+
+  useEffect(() => {
+    // イベント・タスク・誕生日
+    const evs = loadEvents();
+    setEvents(evs);
+
+    const filter = loadCalendarTaskFilter();
+    setCalendarTaskFilter(filter);
+
+    const dict = loadTasksDict();
+    setTasksDict(dict);
+
+    setBirthday(loadBirthday());
+
+    // 子ども
+    const rawChildren = localStorage.getItem("pocopoco_children");
+    if (rawChildren) {
+      try {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) setChildren(arr);
+      } catch {}
+    }
+    const savedChild = localStorage.getItem("pocopoco_current_child_id");
+    if (savedChild) setSelectedChildId(savedChild);
+
+    // 履歴
+    const rawHistory = localStorage.getItem("pocopoco_history");
+    if (rawHistory) {
+      try {
+        const arr = JSON.parse(rawHistory);
+        if (Array.isArray(arr)) {
+          setHistory(arr);
+          const mins = calcDailyMinutes(
+            arr,
+            filter,
+            dict.byId,
+            dict.byLabel,
+            savedChild || "all"
+          );
+          setDailyMinutes(mins);
+        }
+      } catch (e) {
+        console.warn("calendar history load error", e);
+      }
+    }
+    const badges = loadCalendarSettingsFromStorage();
+    setCalendarBadges(badges);
+  }, []);
+
+  // 子どもが変わったり、タスクフィルタが変わった時も再計算
+  useEffect(() => {
+    if (!history || history.length === 0) return;
+    const mins = calcDailyMinutes(
+      history,
+      calendarTaskFilter,
+      tasksDict.byId,
+      tasksDict.byLabel,
+      selectedChildId
+    );
+    setDailyMinutes(mins);
+  }, [history, calendarTaskFilter, tasksDict, selectedChildId]);
+
+  const todayKey = toDayKey(new Date());
+
+  const cells = buildCalendarCells(year, month);
+
+  function goPrevMonth() {
+    setMonth((m) => {
+      const newM = m - 1;
+      if (newM < 0) {
+        setYear((y) => y - 1);
+        return 11;
+      }
+      return newM;
+    });
+  }
+
+  function goNextMonth() {
+    setMonth((m) => {
+      const newM = m + 1;
+      if (newM > 11) {
+        setYear((y) => y + 1);
+        return 0;
+      }
+      return newM;
+    });
+  }
+
+  function getEventsForDay(dayKey) {
+    const childEvents = filterEventsForChild(events, selectedChildId);
+    return childEvents.filter((ev) => ev.date === dayKey);
+  }
+
+  const monthLabel = `${year}年 ${month + 1}月`;
+
+  return (
+    <main
+      style={{
+        padding: "16px 12px 80px",
+        maxWidth: "520px",
+        margin: "0 auto",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "12px",
+        }}
+      >
+        <button onClick={goPrevMonth} style={navBtnStyle}>
+          ←
+        </button>
+        <div
+          style={{
+            fontSize: "16px",
+            fontWeight: 600,
+          }}
+        >
+          {monthLabel}
+        </div>
+        <button onClick={goNextMonth} style={navBtnStyle}>
+          →
+        </button>
+      </header>
+
+      {/* 子どもセレクト */}
+      {children.length > 0 && (
+        <section
+          style={{
+            marginBottom: "12px",
+          }}
+        >
+          <label
+            style={{
+              display: "block",
+              fontSize: "13px",
+              marginBottom: "4px",
+            }}
+          >
+            子どもをえらぶ
+          </label>
+          <select
+            value={selectedChildId}
+            onChange={(e) => setSelectedChildId(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "6px 8px",
+              borderRadius: "8px",
+              border: "1px solid #ccc",
+              fontSize: "13px",
+            }}
+          >
+            <option value="all">👪 みんなまとめて</option>
+            {children.map((ch) => (
+              <option key={ch.id} value={ch.id}>
+                👶 {ch.name}
+              </option>
+            ))}
+          </select>
+        </section>
+      )}
+
+      {/* タスクフィルタの簡易表示（どのタスクがカレンダー対象か） */}
+      <section
+        style={{
+          marginBottom: "12px",
+          fontSize: "12px",
+          color: "#555",
+        }}
+      >
+        <div style={{ marginBottom: "4px", fontWeight: 600 }}>
+          カレンダーに反映するタスク
+        </div>
+        {calendarTaskFilter && calendarTaskFilter.length > 0 ? (
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "4px",
+            }}
+          >
+            {calendarTaskFilter.map((id) => {
+              const t = tasksDict.byId[id];
+              if (!t) return null;
+              return (
+                <li
+                  key={id}
+                  style={{
+                    background: "#f3e5f5",
+                    borderRadius: "999px",
+                    padding: "2px 8px",
+                  }}
+                >
+                  {t.icon || "🎵"} {t.label}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <div>（今のところ、全部のタスクを合計しています）</div>
+        )}
+      </section>
+
+      {/* カレンダー本体 */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#fff",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+          padding: "8px 8px 10px",
+          marginBottom: "12px",
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(7, 1fr)",
+            fontSize: "11px",
+            textAlign: "center",
+            marginBottom: "4px",
+            color: "#666",
+          }}
+        >
+          <div>日</div>
+          <div>月</div>
+          <div>火</div>
+          <div>水</div>
+          <div>木</div>
+          <div>金</div>
+          <div>土</div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(7, 1fr)",
+            gap: "4px",
+            fontSize: "11px",
+          }}
+        >
+          {cells.map((c, idx) => {
+            if (!c) {
+              return <div key={idx} style={{ minHeight: "52px" }} />;
+            }
+            const dayKey = toDayKey(c);
+            const minutes = dailyMinutes[dayKey] || 0;
+            const badge = getBadgeFromSettings(minutes, calendarBadges);
+            const isToday = dayKey === todayKey;
+            const dayEvents = getEventsForDay(dayKey);
+            const isBday = isBirthdayDay(c, birthday);
+
+            return (
+              <div
+                key={idx}
+                style={{
+                  minHeight: "52px",
+                  borderRadius: "10px",
+                  border: `1px solid ${badge.border}`,
+                  background: badge.bg,
+                  padding: "4px 3px",
+                  position: "relative",
+                  boxSizing: "border-box",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: "2px",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: isToday ? 700 : 500,
+                      color: isToday ? "#d32f2f" : "#333",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {c.getDate()}
+                  </div>
+                  {isBday && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        color: "#e91e63",
+                      }}
+                    >
+                      🎂
+                    </span>
+                  )}
+                </div>
+
+                {/* バッジ表示 */}
+                {badge.label && (
+                  <div
+                    style={{
+                      fontSize: "16px",
+                      textAlign: "center",
+                      lineHeight: 1,
+                      marginBottom: "2px",
+                    }}
+                  >
+                    {badge.label}
+                  </div>
+                )}
+
+                {/* 分数表示 */}
+                {minutes > 0 && (
+                  <div
+                    style={{
+                      fontSize: "10px",
+                      color: badge.text,
+                      textAlign: "center",
+                    }}
+                  >
+                    {minutes}分
+                  </div>
+                )}
+
+                {/* イベントアイコン */}
+                {dayEvents.length > 0 && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: "3px",
+                      bottom: "2px",
+                      fontSize: "10px",
+                    }}
+                  >
+                    {dayEvents.slice(0, 2).map((ev) => (
+                      <span key={ev.id} style={{ marginRight: "2px" }}>
+                        {ev.mark || "📅"}
+                      </span>
+                    ))}
+                    {dayEvents.length > 2 && (
+                      <span style={{ fontSize: "9px" }}>+{dayEvents.length - 2}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* バッジの凡例 */}
+      <section
+        style={{
+          borderRadius: "12px",
+          background: "#fff",
+          padding: "10px 10px 12px",
+          marginBottom: "16px",
+          border: "1px solid #eee",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "13px",
+            fontWeight: 600,
+            marginBottom: "6px",
+          }}
+        >
+          バッジの意味
+        </div>
+        <ul
+          style={{
+            listStyle: "none",
+            padding: 0,
+            margin: 0,
+            fontSize: "12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "2px",
+          }}
+        >
+          {DEFAULT_BADGES.map((b) => (
+            <li key={b.id}>
+              {b.icon} … {b.minMinutes}分以上
+            </li>
+          ))}
+        </ul>
+        <div
+          style={{
+            fontSize: "11px",
+            color: "#666",
+            marginTop: "4px",
+          }}
+        >
+          ※ くわしい設定は「設定」画面の「カレンダーのバッジ設定」で変更できます。
+        </div>
+      </section>
+
+      {/* 戻るボタン */}
+      <div
+        style={{
+          textAlign: "center",
+          marginTop: "4px",
+        }}
+      >
+        <button
+          onClick={() => (window.location.href = "/homes")}
+          style={{
+            borderRadius: "999px",
+            border: "none",
+            background:
+              "linear-gradient(135deg, rgba(123,31,162,1), rgba(94,53,177,1))",
+            color: "#fff",
+            padding: "8px 18px",
+            fontWeight: "600",
+          }}
+        >
+          ホームにもどる
+        </button>
+      </div>
+    </main>
+  );
+}
+
+// 子どもIDに見えるイベントかどうか
+function isEventVisibleForChild(ev, childId) {
+  // イベントに子指定がない or "all" → 全員に見える
+  if (!ev.child_id || ev.child_id === "all") return true;
+  // 子どもを選んでない（all表示）→全員向けだけ
+  if (childId === "all") return ev.child_id === "all";
+  // 子どもが一致している時だけ
+  return ev.child_id === childId;
+}
+
+const navBtnStyle = {
+  border: "1px solid #ccc",
+  background: "#fff",
+  borderRadius: "8px",
+  padding: "6px 10px",
+  fontSize: "14px",
+  minWidth: "44px",
+};

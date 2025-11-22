@@ -1,0 +1,833 @@
+// src/app/lib/i18n.js
+"use client";
+
+// -----------------------------------------
+// 言語設定と辞書
+// -----------------------------------------
+export const SUPPORTED_LANGS = ["jp", "hiragana", "en"];
+const STORAGE_KEY = "pocopoco_lang";
+
+// -----------------------------------------
+// 共通辞書
+// -----------------------------------------
+const dict = {
+  // ホームまわり
+  todayLabel: {
+    jp: "今日の練習成果",
+    hiragana: "れんしゅうせいか",
+    en: "Today's Practice",
+  },
+  minutesSuffix: {
+    jp: "分",
+    hiragana: "ふん",
+    en: "min",
+  },
+  sessionsCount: {
+    jp: "記録：",
+    hiragana: "きろく：",
+    en: "sessions:",
+  },
+  limitPerDay: {
+    jp: " 件",
+    hiragana: " けん",
+    en: "",
+  },
+  nextEventCardTitle: {
+    jp: "次のイベント",
+    hiragana: "つぎの いべんと",
+    en: "Next event",
+  },
+  noEventYetTitle: {
+    jp: "イベントは まだ ありません",
+    hiragana: "いべんとは まだ ありません",
+    en: "No event yet",
+  },
+  // --- ホーム画面専用 追加分 ---
+  homeCalendarLink: {
+    jp: "カレンダー画面へ",
+    hiragana: "カレンダーがめんへ",
+    en: "Open Calendar",
+  },
+  homeTaskSectionTitle: {
+    jp: "タスク",
+    hiragana: "タスク",
+    en: "Tasks",
+  },
+  todayShort: {
+    jp: "今日",
+    hiragana: "きょう",
+    en: "Today",
+  },
+  totalLabel: {
+    jp: "総合計",
+    hiragana: "ごうけい",
+    en: "Total",
+  },
+  weeklyBoardTitle: {
+    jp: "今日の週間ボード",
+    hiragana: "きょうのボード",
+    en: "Today's WeeklyBoard",
+  },
+  weeklyBoardEmptyHint: {
+    jp: "まだ登録がありません。週間ボードで時間割やToDoを追加できます。",
+    hiragana:
+      "まだとうろくがありません。しゅうかんボードで じかんわりや ToDo を ついかできます。",
+    en: "You can add timetables, to-dos, etc. on the weekly board.",
+  },
+  // 表示テキストはナシにするが、スクリーンリーダー用に残す
+  noEventYetHint: {
+    jp: "設定画面で イベントを 入力すると ここに 表示されます。",
+    hiragana: "せっていがめんで いべんとを いれると ここに でます。",
+    en: "Add an event in Settings to show it here.",
+  },
+  daysLeftSuffix: {
+    jp: "日 後 本番",
+    hiragana: "にち ご ほんばん",
+    en: "days to go",
+  },
+  practiceMenuTitle: {
+    jp: "練習メニュー",
+    hiragana: "れんしゅう めにゅー",
+    en: "Practice menu",
+  },
+  tapToRecord: {
+    jp: "タップで 記録",
+    hiragana: "たっぷで きろく",
+    en: "Tap to record",
+  },
+  badgeBronze: {
+    jp: "15分がんばった！",
+    hiragana: "15ふん がんばった！",
+    en: "15 min done!",
+  },
+  badgeSilver: {
+    jp: "30分すごい！",
+    hiragana: "30ふん すごい！",
+    en: "30 min, great!",
+  },
+  badgeGold: {
+    jp: "60分えらい！",
+    hiragana: "60ふん えらい！",
+    en: "60 min, amazing!",
+  },
+// カレンダー画面まわり
+calendarTaskFilterTitle: {
+  jp: "カレンダーに反映するタスク",
+  hiragana: "カレンダーに はんえいする たすく",
+  en: "Tasks reflected in calendar",
+},
+  // -------------------------------
+  // 曲リスト画面まわり
+  // -------------------------------
+  songsCsvExport: {
+    jp: "CSV出力",
+    hiragana: "CSVしゅつりょく",
+    en: "Output",
+  },
+  songsCsvImport: {
+    jp: "CSV取込",
+    hiragana: "CSVとりこみ",
+    en: "Import",
+  },
+  songsAddToList: {
+    jp: "リストに追加",
+    hiragana: "リストに ついか",
+    en: "Add to list",
+  },
+  songsNoChildRegistered: {
+    jp: "子ども未登録",
+    hiragana: "こども みとうろく",
+    en: "No child registered",
+  },
+  songsRegisteredSongsTitle: {
+    jp: "登録済みの曲",
+    hiragana: "とうろくずみの きょく",
+    en: "Registered songs",
+  },
+  songsMemoUsage: {
+    jp: "1曲に対して発表日が複数日ある場合や、練習開始日などを記載したい場合には、メモ欄をご活用ください。",
+    hiragana:
+      "1きょくに たいして はっぴょうび が ふくすう ある ばあい や、れんしゅう かいしび などを きさい したい ばあいには、メモらん を ごかつよう ください。",
+    en: "Please use the notes field (memo column) if there are multiple presentation dates for a single song, or if you want to include details such as the practice start date.",
+  },
+  songsEmptyMessageLine1: {
+    jp: "この子の曲が まだ登録されていません。",
+    hiragana: "このこの きょくが まだ とうろくされていません。",
+    en: "No songs have been registered for this child yet.",
+  },
+  songsEmptyMessageLine2: {
+    jp: "「リストに追加」ボタンから 追加してください。",
+    hiragana: "「リストに ついか」ボタンから ついか してください。",
+    en: "Please add songs using the “Add to list” button.",
+  },
+
+  songsHeaderComposer: {
+    jp: "作曲者名",
+    hiragana: "さっきょくしゃめい",
+    en: "Composer",
+  },
+  songsHeaderTitle: {
+    jp: "曲名",
+    hiragana: "きょくめい",
+    en: "Song title",
+  },
+  songsHeaderDate: {
+    jp: "発表日",
+    hiragana: "はっぴょうび",
+    en: "Date",
+  },
+  songsHeaderPlace: {
+    jp: "発表場所",
+    hiragana: "はっぴょうばしょ",
+    en: "Location",
+  },
+  songsHeaderTotal: {
+    jp: "練習合計",
+    hiragana: "れんしゅうごうけい",
+    en: "Practice total",
+  },
+  songsHeaderMemo: {
+    jp: "メモ",
+    hiragana: "メモ",
+    en: "MEMO",
+  },
+  songsHeaderActions: {
+    jp: "操作",
+    hiragana: "そうさ",
+    en: "Actions",
+  },
+  // 編集ボタンはアイコンのみ表示。スクリーンリーダー用ラベル
+  songsEditAria: {
+    jp: "この曲を編集",
+    hiragana: "このきょくを へんしゅう",
+    en: "Edit this song",
+  },
+  // -------------------------------
+  // 曲リスト登録画面（/songs/new）
+  // -------------------------------
+  newSongPageTitle: {
+    jp: "曲を追加",
+    hiragana: "きょくを ついか",
+    en: "Add a song",
+  },
+  newSongChildLabel: {
+    jp: "子ども",
+    hiragana: "こども",
+    en: "Children",
+  },
+  newSongCancel: {
+    jp: "キャンセル",
+    hiragana: "きゃんせる",
+    en: "Cancel",
+  },
+  newSongRegister: {
+    jp: "登録する",
+    hiragana: "とうろくする",
+    en: "Register",
+  },
+  newSongAlertRequireTitleOrComposer: {
+    jp: "曲名か作曲者名を入力してください。",
+    hiragana: "きょくめい か さっきょくしゃめい を にゅうりょく してください。",
+    en: "Please enter either the song title or the composer's name.",
+  },
+  newSongAlertSaveFailed: {
+    jp: "データの保存に失敗しました。",
+    hiragana: "データの ほぞんに しっぱいしました。",
+    en: "Failed to save data.",
+  },
+
+  songsAlertRegisterChildFirst: {
+    jp: "まず 子どもを 1人以上 登録してください。",
+    hiragana: "まず こどもを 1にんいじょう とうろく してください。",
+    en: "Please register at least one child first.",
+  },
+  songsAlertSelectChild: {
+    jp: "子どもを選択してください。",
+    hiragana: "こどもを せんたく してください。",
+    en: "Please select a child.",
+  },
+  songsAlertNoSongsForChild: {
+    jp: "この子の曲は まだ登録されていません。",
+    hiragana: "このこの きょくは まだ とうろくされていません。",
+    en: "No songs have been registered for this child yet.",
+  },
+  songsAlertFileEmpty: {
+    jp: "ファイルが空です。",
+    hiragana: "ファイルが から です。",
+    en: "The file is empty.",
+  },
+  songsAlertHeaderMismatch: {
+    jp: "CSVの1行目の項目名が想定と異なります。\npocopoco から出力した曲リストCSVを使用してください。",
+    hiragana:
+      "CSVの1ぎょうめの こうもくめいが そうていと ことなります。\npocopoco から しゅつりょくした きょくリストCSVを しようしてください。",
+    en: "The header row of the CSV does not match the expected format.\nPlease use the song-list CSV exported from pocopoco.",
+  },
+  songsAlertNoSongsInFile: {
+    jp: "読み込める曲データが 見つかりませんでした。",
+    hiragana: "よみこめる きょくデータが みつかりませんでした。",
+    en: "No valid song data was found in the file.",
+  },
+  songsAlertImportSuccessPrefix: {
+    jp: "曲データを ",
+    hiragana: "きょくデータを ",
+    en: "Imported ",
+  },
+  songsAlertImportSuccessSuffix: {
+    jp: " 件 読み込みました。（既存データは上書き）",
+    hiragana: " けん よみこみました。（きそんデータは うわがき）",
+    en: " song records. (Existing data has been overwritten.)",
+  },
+  // -------------------------------
+  // 曲リスト編集画面（/songs/edit）
+  // -------------------------------
+  editSongPageTitle: {
+    jp: "曲を編集",
+    hiragana: "きょくを へんしゅう",
+    en: "Edit song",
+  },
+  editSongUpdate: {
+    jp: "更新",
+    hiragana: "こうしん",
+    en: "Update",
+  },
+  editSongAlertTitleRequired: {
+    jp: "曲名は必須です。",
+    hiragana: "きょくめいは ひっす です。",
+    en: "The song title is required.",
+  },
+  editSongNotFoundMessage: {
+    jp: "編集対象の曲データが見つかりませんでした。",
+    hiragana: "へんしゅう たいしょうの きょくデータが みつかりませんでした。",
+    en: "The song data you want to edit could not be found.",
+  },
+  editSongBackToList: {
+    jp: "曲リストに戻る",
+    hiragana: "きょくリストに もどる",
+    en: "Back to song list",
+  },
+
+  // -------------------------------
+  // 記録画面まわり
+  // -------------------------------
+  recordSongLabel: {
+    jp: "曲",
+    hiragana: "きょく",
+    en: "Songs",
+  },
+  recordOpenSongsList: {
+    jp: "曲リストをひらく",
+    hiragana: "きょくリストをひらく",
+    en: "Open the Songs list",
+  },
+  recordNoSongSelected: {
+    jp: "曲を選ばない",
+    hiragana: "きょくをえらばない",
+    // スペルを少しだけ自然に直しています
+    en: "I don't choose this song",
+  },
+  recordTimeLabel: {
+    jp: "時間",
+    hiragana: "じかん",
+    en: "Times",
+  },
+  recordEndPractice: {
+    jp: "練習おわり",
+    hiragana: "れんしゅうおわり",
+    en: "End of practice",
+  },
+  recordCountLabel: {
+    jp: "回数",
+    hiragana: "かいすう",
+    en: "Number of times",
+  },
+  recordCountButton: {
+    jp: "カウントする",
+    hiragana: "かぞえる",
+    en: "Count",
+  },
+  recordMemoLabel: {
+    jp: "メモ",
+    hiragana: "メモ",
+    en: "MEMO",
+  },
+  recordMemoPlaceholder: {
+    jp: "頑張ったことと、注意点などを記載できます",
+    hiragana: "がんばったことと や、きをつけることを かいてね",
+    en: "You can write down what you did well, what you should pay attention to, etc.",
+  },
+  recordSaveButton: {
+    jp: "保存",
+    hiragana: "ほぞん",
+    en: "Save",
+  },
+  recordSavedMessage: {
+    jp: "記録しました。お疲れ様でした！",
+    hiragana: "きろくしました。がんばったね！",
+    en: "Saved. You did your best!",
+  },
+
+  // -------------------------------
+  // 履歴画面まわり
+  // -------------------------------
+  historyAllTasks: {
+    jp: "すべてのタスク",
+    hiragana: "すべてのタスク",
+    en: "All",
+  },
+  historyDay: {
+    jp: "日",
+    hiragana: "にち",
+    en: "day",
+  },
+  historyWeek: {
+    jp: "週",
+    hiragana: "しゅう",
+    en: "week",
+  },
+  historyMonth: {
+    jp: "月",
+    hiragana: "つき",
+    en: "month",
+  },
+  historyAllRange: {
+    jp: "すべて",
+    hiragana: "すべて",
+    en: "All",
+  },
+  historyCsvExport: {
+    jp: "CSV出力",
+    hiragana: "CSVしゅつりょく",
+    en: "output",
+  },
+  historyCsvImport: {
+    jp: "CSV取込",
+    hiragana: "CSVとりこみ",
+    en: "import",
+  },
+  historyChartTitle: {
+    jp: "グラフ",
+    hiragana: "グラフ",
+    en: "Chart",
+  },
+  historyChartDescription: {
+    jp: "上のタスクと期間をえらぶと、合計練習時間のグラフが見られます。",
+    hiragana:
+      "タスクと きかんを えらぶと、ごうけい れんしゅうじかんのグラフが みられるよ",
+    en: "Select the task and period above to view a graph of your total practice time.",
+  },
+  historyMinutesUnit: {
+    jp: "分",
+    hiragana: "ふん",
+    en: "minutes",
+  },
+  historyTodaySummary: {
+    jp: "今日のまとめ",
+    hiragana: "きょうのまとめ",
+    en: "Today's summary",
+  },
+  historyTotalTime: {
+    jp: "合計時間",
+    hiragana: "ごうけいじかん",
+    en: "total time",
+  },
+  historyTotalCounts: {
+    jp: "合計回数",
+    hiragana: "ごうけいかいすう",
+    en: "total counts",
+  },
+  historyItemsCount: {
+    jp: "件数",
+    hiragana: "けんすう",
+    en: "items",
+  },
+  historyTimesUnit: {
+    jp: "回",
+    hiragana: "かい",
+    en: "times",
+  },
+  historyItemUnit: {
+    jp: "件",
+    hiragana: "けん",
+    en: "item",
+  },
+  historyChildRecordTitle: {
+    jp: "この子の記録",
+    hiragana: "このこのきろく",
+    en: "This child's record",
+  },
+  // 編集ボタンはアイコンのみ表示にするので、スクリーンリーダー用のラベルだけ
+  historyEditAria: {
+    jp: "この記録を編集",
+    hiragana: "このきろくを へんしゅう",
+    en: "Edit this record",
+  },
+  // -------------------------------
+  // 週間ボード画面まわり
+  // -------------------------------
+  weeklyCsvExport: {
+    jp: "CSV出力",
+    hiragana: "CSVしゅつりょく",
+    en: "Output",
+  },
+  weeklyCsvImport: {
+    jp: "CSV取込",
+    hiragana: "CSVとりこみ",
+    en: "Import",
+  },
+
+  weeklySun: {
+    jp: "日",
+    hiragana: "にち",
+    en: "Sun",
+  },
+  weeklyMon: {
+    jp: "月",
+    hiragana: "げつ",
+    en: "Mon",
+  },
+  weeklyTue: {
+    jp: "火",
+    hiragana: "か",
+    en: "Tue",
+  },
+  weeklyWed: {
+    jp: "水",
+    hiragana: "すい",
+    en: "Wed",
+  },
+  weeklyThu: {
+    jp: "木",
+    hiragana: "もく",
+    en: "Thur",
+  },
+  weeklyFri: {
+    jp: "金",
+    hiragana: "きん",
+    en: "Fri",
+  },
+  weeklySat: {
+    jp: "土",
+    hiragana: "ど",
+    en: "Sat",
+  },
+
+  weeklyColorNote: {
+    jp: "※ 3コマごとに背景色を変えています（朝・午前・午後・放課後などの目安）。",
+    hiragana:
+      "※ 3こまごとに はいけいしょくを かえています（あさ・ごぜん・ごご・ほうかご などの めやす）。",
+    en: "The background color changes every three periods (e.g., as a guide for morning, afternoon, and after school).",
+  },
+  weeklyUsageNote: {
+    jp: "※ 授業や習い事の時間割として、ToDoリストとして、持ち物リストとしてなどさまざまに活用していただけます。",
+    hiragana:
+      "※ じゅぎょうや ならいごとの じかんわりとして、ToDoリストとして、もちものリストとして など さまざまに かつようして いただけます。",
+    en: "It can be utilized in various ways, such as a class or lesson timetable, a to-do list, or a checklist for belongings.",
+  },
+
+  // -------------------------------
+  // 設定画面まわり（今回の修正版）
+  // -------------------------------
+
+  settingsTitle: {
+    jp: "設定",
+    hiragana: "せってい",
+    en: "Settings",
+  },
+  // モード切替
+  settingsCurrentModeLabel: {
+    jp: "現在のモード",
+    hiragana: "げんざいのモード",
+    en: "current mode",
+  },
+  settingsParentModeLabel: {
+    jp: "親モード",
+    hiragana: "おやモード",
+    en: "parent mode",
+  },
+  settingsChildModeLabel: {
+    jp: "子モード",
+    hiragana: "こモード",
+    en: "child mode",
+  },
+  settingsSwitchToParent: {
+    jp: "親モードにする",
+    hiragana: "おやモードにする",
+    en: "set to parent mode",
+  },
+  settingsSwitchToChild: {
+    jp: "子モードにする",
+    hiragana: "こモードにする",
+    en: "set to child mode",
+  },
+  settingsReturnToLogin: {
+    jp: "ログイン画面にもどる",
+    hiragana: "ろぐいんがめんにもどる",
+    en: "Return to login screen",
+  },
+  // 言語と保存
+  settingsLang: {
+    jp: "表示言語",
+    hiragana: "ひょうじげんご",
+    en: "Language",
+  },
+  settingsSave: {
+    jp: "保存",
+    hiragana: "ほぞん",
+    en: "Save",
+  },
+  // 秘密コード
+  parentSecretCode: {
+    jp: "大人の秘密コード",
+    hiragana: "おとなの ひみつコード",
+    en: "Parent secret code",
+  },
+  saveSecretCode: {
+    jp: "秘密コードを保存",
+    hiragana: "ひみつコードを ほぞん",
+    en: "save secret code",
+  },
+  // 子ども情報
+  childrenSectionTitle: {
+    jp: "子どもの登録（5人まで）",
+    hiragana: "こどもの とうろく（5にんまで）",
+    en: "Children (up to 5)",
+  },
+  showThisChild: {
+    jp: "この子を表示",
+    hiragana: "このこを ひょうじ",
+    en: "Show this child",
+  },
+  deleteLabel: {
+    jp: "削除",
+    hiragana: "さくじょ",
+    en: "Delete",
+  },
+  nameLabel: {
+    jp: "なまえ",
+    hiragana: "なまえ",
+    en: "Name",
+  },
+  yearLabel: {
+    jp: "年",
+    hiragana: "ねん",
+    en: "Year",
+  },
+  monthLabel: {
+    jp: "月",
+    hiragana: "がつ",
+    en: "Month",
+  },
+  dayLabel: {
+    jp: "日",
+    hiragana: "にち",
+    en: "Day",
+  },
+  // タスク設定
+  addButton: {
+    jp: "追加",
+    hiragana: "ついか",
+    en: "Add",
+  },
+  tasksSectionTitle: {
+    jp: "タスクの設定",
+    hiragana: "たすくの せってい",
+    en: "Task settings",
+  },
+  calendarTaskReflect: {
+    jp: "カレンダーに反映",
+    hiragana: "カレンダーに はんえい",
+    en: "Reflected on calendar",
+  },
+  deleteTaskLabel: {
+    jp: "削除",
+    hiragana: "けす",
+    en: "Delete",
+  },
+  addTaskButton: {
+    jp: "タスクを追加",
+    hiragana: "たすくを ついか",
+    en: "add task",
+  },
+  violinLabel: {
+    jp: "バイオリン",
+    hiragana: "バイオリン",
+    en: "Violin",
+  },
+  // バッジ設定（カレンダー）
+  badgeSettingsTitle: {
+    jp: "カレンダーのバッジ設定",
+    hiragana: "カレンダーの バッジせってい",
+    en: "Badge Settings",
+  },
+  badgeSettingsDescription: {
+    jp: "ホーム画面のミニカレンダーと「カレンダー」画面で、1日の練習時間に応じて表示するバッジを決めます。",
+    hiragana:
+      "ホームがめんの ミニカレンダーと「カレンダー」がめんで、1にちの れんしゅうじかんに おうじて ひょうじする バッジを きめます。",
+    en: 'On the mini calendar on the home screen and on the "Calendar" screen, you can decide which badges to display depending on the amount of practice time per day.',
+  },
+  minutesOrMore: {
+    jp: "分以上",
+    hiragana: "ふんいじょう",
+    en: "minutes or more",
+  },
+  badgeSettingsSaveButton: {
+    jp: "バッジ設定を保存",
+    hiragana: "バッジせっていを ほぞん",
+    en: "Save Badge Settings",
+  },
+  // カレンダーイベント設定
+  calendarEventsTitle: {
+    jp: "カレンダーに表示させるイベント",
+    hiragana: "カレンダーに ひょうじさせる いべんと",
+    en: "Events to display on the calendar",
+  },
+  calendarEventsDescription: {
+    jp: "ここに追加したイベントはカレンダーに表示されます。子どもをえらんで登録できます。同じ子どもにつき1件だけ「ホームにも表示」をつけられます。",
+    hiragana:
+      "ここに ついかした いべんとは カレンダーに ひょうじされます。こどもを えらんで とうろくできます。同じ こどもに つき1けんだけ「ホームにも ひょうじ」を つけられます。",
+    en: 'Events added here will be displayed on the calendar. You can select a child to register. You can only set one event per child to "Show on Home."',
+  },
+  everyoneEventsTitle: {
+    jp: "みんなのイベント",
+    hiragana: "みんなの いべんと",
+    en: "Everyone's Events",
+  },
+  displayOnChildHome: {
+    jp: "この子のホームにも表示する",
+    hiragana: "このこの ホームにも ひょうじする",
+    en: "Display on this child's home page",
+  },
+  eventNameLabel: {
+    jp: "イベント名",
+    hiragana: "いべんとめい",
+    en: "Event Name",
+  },
+  visibleToEveryone: {
+    jp: "全員に表示",
+    hiragana: "ぜんいんに ひょうじ",
+    en: "Visible to everyone",
+  },
+  shownInLabel: {
+    jp: "に表示",
+    hiragana: "に ひょうじ",
+    en: "Shown in",
+  },
+  // アプリ情報
+  appInfoTitle: {
+    jp: "アプリ情報",
+    hiragana: "アプリじょうほう",
+    en: "App information",
+  },
+  appUpdateDateLabel: {
+    jp: "更新日",
+    hiragana: "こうしんび",
+    en: "Update date",
+  },
+  appLegalNotice: {
+    jp: "法律上の表示",
+    hiragana: "ほうりつじょうの ひょうじ",
+    en: "Legal Notice",
+  },
+  appTermsOfService: {
+    jp: "利用規約",
+    hiragana: "りようきやく",
+    en: "Terms of service",
+  },
+  appPrivacyPolicy: {
+    jp: "プライバシーポリシー",
+    hiragana: "プライバシーポリシー",
+    en: "Privacy Policy",
+  },
+  appSctaDescription: {
+    jp: "特定商取引法に基づく表記",
+    hiragana: "とくていしょうとりひきほうに もとづく ひょうき",
+    en: "Description based on the Specified Commercial Transactions Act",
+  },
+  appUsageGuide: {
+    jp: "つかいかたガイド",
+    hiragana: "つかいかた ガイド",
+    en: "Usage Guide",
+  },
+  appInstagramDescription: {
+    jp: "くわしい使い方や最新情報は Instagram @chocoonlabo で発信しています。",
+    hiragana:
+      "くわしい つかいかたや さいしんじょうほうは Instagram @chocoonlabo で はっしんしています。",
+    en: "Detailed instructions and the latest information can be found on Instagram @chocoonlabo.",
+  },
+  // その他
+  dataBackupTitle: {
+    jp: "データのバックアップ / 引越し",
+    hiragana: "でーたの ばっくあっぷ / ひっこし",
+    en: "Backup / migrate data",
+  },
+  badgeSettingsSavedMessage: {
+    jp: "カレンダーのバッジ設定を保存しました。",
+    hiragana: "カレンダーの バッジせっていを ほぞんしました。",
+    en: "Calendar badge settings saved.",
+  },
+
+  // ログイン
+  loginTitle: {
+    jp: "pocopoco にログインする",
+    hiragana: "pocopoco に ろぐいんする",
+    en: "Sign in to pocopoco",
+  },
+  loginParent: {
+    jp: "保護者としてログインする",
+    hiragana: "ほごしゃ として ろぐいんする",
+    en: "Enter as parent",
+  },
+  loginChild: {
+    jp: "子どもとしてログインする",
+    hiragana: "こども として ろぐいんする",
+    en: "Enter as child",
+  },
+};
+
+// -----------------------------------------
+// 言語取得・保存
+// -----------------------------------------
+export function getLangFromStorage() {
+  if (typeof window === "undefined") return "jp";
+  const saved = window.localStorage.getItem(STORAGE_KEY);
+  if (saved && SUPPORTED_LANGS.includes(saved)) return saved;
+  return "jp";
+}
+
+export function setLangToStorage(lang) {
+  if (typeof window === "undefined") return;
+  const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "jp";
+  try {
+    window.localStorage.setItem(STORAGE_KEY, useLang);
+  } catch (e) {
+    console.error("Failed to save language:", e);
+  }
+}
+
+// -----------------------------------------
+// 翻訳関数
+// -----------------------------------------
+export function t(key, lang) {
+  const useLang = SUPPORTED_LANGS.includes(lang) ? lang : "jp";
+  const entry = dict[key];
+  if (!entry) return key;
+  return entry[useLang] ?? entry["jp"] ?? key;
+}
+
+// -----------------------------------------
+// 辞書追加ヘルパー
+// -----------------------------------------
+export function addTranslations(newDict) {
+  Object.keys(newDict).forEach((k) => {
+    dict[k] = { ...(dict[k] || {}), ...newDict[k] };
+  });
+}
+
+// -----------------------------------------
+export default {
+  SUPPORTED_LANGS,
+  getLangFromStorage,
+  setLangToStorage,
+  t,
+  addTranslations,
+};

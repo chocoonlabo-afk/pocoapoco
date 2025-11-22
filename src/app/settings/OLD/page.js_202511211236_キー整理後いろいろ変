@@ -1,0 +1,1146 @@
+// src/app/settings/page.js
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import { t, getLangFromStorage, setLangToStorage } from "@/app/lib/i18n";
+import {
+  LS_ROLE,
+  LS_PARENT_CODE,
+  LS_PARENT_AUTHED,
+  LS_HISTORY,
+  LS_TASKS,
+  LS_CHILDREN,
+  LS_CURRENT_CHILD_ID,
+  LS_EVENTS,
+  LS_EVENT_LEGACY,
+  LS_CALENDAR_TASK_FILTER,
+  LS_CALENDAR_SETTINGS,
+  MAX_CHILDREN,
+  ROUTE_LOGIN,
+} from "@/app/constants";
+
+const DEFAULT_TASKS = [
+  { id: "task_violin", label: "バイオリン", icon: "🎻" },
+  { id: "task_piano", label: "ピアノ", icon: "🎹" },
+  { id: "task_solfege", label: "ソルフェージュ", icon: "📝" },
+  { id: "task_japanese", label: "国語", icon: "📖" },
+  { id: "task_math", label: "算数", icon: "🔢" },
+  { id: "task_english", label: "英語", icon: "🇬🇧" },
+  { id: "task_science", label: "理科", icon: "🔬" },
+  { id: "task_social", label: "社会", icon: "🌍" },
+];
+
+// カレンダー設定（バッジ）
+// カレンダー設定キーは constants から利用
+// （内部的な文字列は LS_CALENDAR_SETTINGS で一元管理）
+
+const DEFAULT_BADGES = [
+  { id: "level1", name: "少しでも練習した日", minMinutes: 1, icon: "🌸" },
+  { id: "level2", name: "たくさん練習（銅）", minMinutes: 30, icon: "🥉" },
+  { id: "level3", name: "もっとたくさん（銀）", minMinutes: 60, icon: "🥈" },
+  { id: "level4", name: "すごくがんばった（金）", minMinutes: 90, icon: "🥇" },
+];
+
+function loadCalendarSettingsFromStorage() {
+  let badges = DEFAULT_BADGES;
+  let firstDayOfWeek = "sun";
+
+  try {
+    const raw = localStorage.getItem(LS_CALENDAR_SETTINGS);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && typeof data === "object") {
+        if (data.firstDayOfWeek === "mon") {
+          firstDayOfWeek = "mon";
+        }
+        if (Array.isArray(data.badges) && data.badges.length > 0) {
+          badges = DEFAULT_BADGES.map((def) => {
+            const found = data.badges.find((b) => b.id === def.id);
+            return found ? { ...def, ...found } : def;
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("calendar settings parse error", e);
+  }
+
+  return { firstDayOfWeek, badges };
+}
+
+export default function SettingsPage() {
+  const [role, setRole] = useState("parent"); // "parent" | "child"
+  const [parentCode, setParentCode] = useState("");
+  const [parentAuthed, setParentAuthed] = useState(false);
+
+  const [lang, setLang] = useState(getLangFromStorage());
+
+  const [tasks, setTasks] = useState([]);
+  const [children, setChildren] = useState([]);
+  const [historyCount, setHistoryCount] = useState(0);
+
+  const [calendarTaskFilter, setCalendarTaskFilter] = useState([]);
+  const [calendarBadges, setCalendarBadges] = useState(DEFAULT_BADGES);
+
+  const [firstDayOfWeek, setFirstDayOfWeek] = useState("sun");
+
+  const [statusMsg, setStatusMsg] = useState("");
+  const statusTimerRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      const savedRole = localStorage.getItem(LS_ROLE);
+      if (savedRole === "parent" || savedRole === "child") {
+        setRole(savedRole);
+      }
+
+      const savedCode = localStorage.getItem(LS_PARENT_CODE);
+      if (savedCode) setParentCode(savedCode);
+
+      // history
+      const rawHistory = localStorage.getItem(LS_HISTORY);
+      if (rawHistory) {
+        try {
+          const arr = JSON.parse(rawHistory);
+          if (Array.isArray(arr)) {
+            setHistoryCount(arr.length);
+          }
+        } catch {}
+      }
+
+      // tasks
+      const rawTasks = localStorage.getItem(LS_TASKS);
+      if (rawTasks) {
+        try {
+          const arr = JSON.parse(rawTasks);
+          if (Array.isArray(arr) && arr.length > 0) {
+            setTasks(arr);
+          } else {
+            setTasks(DEFAULT_TASKS);
+          }
+        } catch {
+          setTasks(DEFAULT_TASKS);
+        }
+      } else {
+        setTasks(DEFAULT_TASKS);
+      }
+
+      // children
+      const rawChildren = localStorage.getItem(LS_CHILDREN);
+      if (rawChildren) {
+        try {
+          const arr = JSON.parse(rawChildren);
+          if (Array.isArray(arr)) setChildren(arr);
+        } catch {}
+      }
+
+      // calendar task filter
+      const rawCalTaskFilter = localStorage.getItem(
+        LS_CALENDAR_TASK_FILTER
+      );
+      if (rawCalTaskFilter) {
+        const arr = JSON.parse(rawCalTaskFilter);
+        if (Array.isArray(arr)) {
+          setCalendarTaskFilter(arr);
+        }
+      }
+
+      // calendar settings（バッジ + 週の始まり）
+      const { firstDayOfWeek: fd, badges } =
+        loadCalendarSettingsFromStorage();
+      setFirstDayOfWeek(fd);
+      setCalendarBadges(badges);
+
+      // 親認証フラグ（子モード切り替え時に使用）
+      const savedAuthed = localStorage.getItem(LS_PARENT_AUTHED);
+      setParentAuthed(savedAuthed === "1");
+    } catch (e) {
+      console.warn("settings init error", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!statusMsg) return;
+    if (statusTimerRef.current) {
+      clearTimeout(statusTimerRef.current);
+    }
+    statusTimerRef.current = setTimeout(() => {
+      setStatusMsg("");
+    }, 3000);
+  }, [statusMsg]);
+
+  const handleRoleChange = (newRole) => {
+    setRole(newRole);
+    localStorage.setItem(LS_ROLE, newRole);
+    if (newRole === "parent") {
+      setParentAuthed(true);
+      localStorage.setItem(LS_PARENT_AUTHED, "1");
+    } else {
+      setParentAuthed(false);
+      localStorage.setItem(LS_PARENT_AUTHED, "0");
+    }
+    setStatusMsg("モードを切り替えました");
+  };
+
+  const handleParentCodeSave = () => {
+    localStorage.setItem(LS_PARENT_CODE, parentCode);
+    setStatusMsg("大人のひみつコードを保存しました");
+  };
+
+  const handleLangChange = (next) => {
+    setLang(next);
+    setLangToStorage(next);
+    setStatusMsg("表示言語を変更しました");
+  };
+
+  const handleAddTask = () => {
+    const id = "task_" + Date.now().toString(36);
+    const newTask = { id, label: "新しいタスク", icon: "⭐" };
+    const next = [...tasks, newTask];
+    setTasks(next);
+    localStorage.setItem(LS_TASKS, JSON.stringify(next));
+    setStatusMsg("タスクを追加しました");
+  };
+
+  const handleTaskChange = (id, field, value) => {
+    const next = tasks.map((task) =>
+      task.id === id ? { ...task, [field]: value } : task
+    );
+    setTasks(next);
+    localStorage.setItem(LS_TASKS, JSON.stringify(next));
+  };
+
+  const handleTaskDelete = (id) => {
+    if (!window.confirm("このタスクを削除しますか？")) return;
+    const next = tasks.filter((task) => task.id !== id);
+    setTasks(next);
+    localStorage.setItem(LS_TASKS, JSON.stringify(next));
+    setStatusMsg("タスクを削除しました");
+  };
+
+  const handleAddChild = () => {
+    if (children.length >= MAX_CHILDREN) {
+      setStatusMsg("こどもは5人まで登録できます");
+      return;
+    }
+    const id = "child_" + Date.now().toString(36);
+    const newChild = {
+      id,
+      name: `お子さま${children.length + 1}`,
+      color: "#6366f1",
+      instrument: "🎻",
+    };
+    const next = [...children, newChild];
+    setChildren(next);
+    localStorage.setItem(LS_CHILDREN, JSON.stringify(next));
+    setStatusMsg("お子さまを追加しました");
+  };
+
+  const handleChildChange = (id, field, value) => {
+    const next = children.map((child) =>
+      child.id === id ? { ...child, [field]: value } : child
+    );
+    setChildren(next);
+    localStorage.setItem(LS_CHILDREN, JSON.stringify(next));
+  };
+
+  const handleChildDelete = (id) => {
+    if (!window.confirm("このお子さまを削除しますか？")) return;
+    const next = children.filter((child) => child.id !== id);
+    setChildren(next);
+    localStorage.setItem(LS_CHILDREN, JSON.stringify(next));
+
+    const currentId = localStorage.getItem(LS_CURRENT_CHILD_ID);
+    if (currentId && currentId === id) {
+      localStorage.removeItem(LS_CURRENT_CHILD_ID);
+    }
+
+    setStatusMsg("お子さまを削除しました");
+  };
+
+  const handleDownloadHistory = () => {
+    try {
+      const raw = localStorage.getItem(LS_HISTORY);
+      if (!raw) {
+        alert("記録データがありません");
+        return;
+      }
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || arr.length === 0) {
+        alert("記録データがありません");
+        return;
+      }
+
+      const header = [
+        "childId",
+        "childName",
+        "taskId",
+        "taskLabel",
+        "songTitle",
+        "minutes",
+        "memo",
+        "date",
+        "datetime",
+      ];
+      const lines = [header.join(",")];
+
+      arr.forEach((h) => {
+        const row = [
+          h.childId ?? "",
+          (h.childName ?? "").replace(/"/g, '""'),
+          h.taskId ?? "",
+          (h.taskLabel ?? "").replace(/"/g, '""'),
+          (h.songTitle ?? "").replace(/"/g, '""'),
+          h.minutes ?? "",
+          (h.memo ?? "").replace(/"/g, '""'),
+          h.date ?? "",
+          h.datetime ?? "",
+        ];
+        lines.push(
+          row
+            .map((v) => {
+              const s = String(v ?? "");
+              if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+                return `"${s.replace(/"/g, '""')}"`;
+              }
+              return s;
+            })
+            .join(",")
+        );
+      });
+
+      const csv = "\uFEFF" + lines.join("\r\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const today = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `pocopoco_history_${today}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatusMsg("記録データをCSVでダウンロードしました");
+    } catch (e) {
+      console.error(e);
+      alert("CSVの作成中にエラーが発生しました");
+    }
+  };
+
+  const handleClearHistory = () => {
+    if (!window.confirm("すべての記録データを削除しますか？\nこの操作は取り消せません。"))
+      return;
+    localStorage.removeItem(LS_HISTORY);
+    setHistoryCount(0);
+    setStatusMsg("記録データを削除しました");
+  };
+
+  // カレンダーに表示するタスク
+  const handleToggleCalendarTask = (id) => {
+    if (id === "all") {
+      const next =
+        calendarTaskFilter.length === tasks.length
+          ? []
+          : tasks.map((t) => t.id);
+      setCalendarTaskFilter(next);
+      localStorage.setItem(
+        LS_CALENDAR_TASK_FILTER,
+        JSON.stringify(next)
+      );
+      setStatusMsg("カレンダーのタスクを設定しました");
+      return;
+    }
+    const exists = calendarTaskFilter.includes(id);
+    let next;
+    if (exists) {
+      next = calendarTaskFilter.filter((x) => x !== id);
+    } else {
+      next = [...calendarTaskFilter, id];
+    }
+    setCalendarTaskFilter(next);
+    localStorage.setItem(LS_CALENDAR_TASK_FILTER, JSON.stringify(next));
+    setStatusMsg("カレンダーのタスクを設定しました");
+  };
+
+  const handleClearCalendarTaskFilter = () => {
+    setCalendarTaskFilter([]);
+    localStorage.removeItem(LS_CALENDAR_TASK_FILTER);
+    setStatusMsg("カレンダーのタスク表示設定をクリアしました");
+  };
+
+  // カレンダーのバッジ設定保存
+  function handleChangeBadge(id, field, value) {
+    setCalendarBadges((prev) =>
+      prev.map((b) =>
+        b.id === id
+          ? {
+              ...b,
+              [field]:
+                field === "minMinutes"
+                  ? Number(value || 0)
+                  : String(value || ""),
+            }
+          : b
+      )
+    );
+  }
+
+  function handleSaveCalendarBadges() {
+    const cleaned = calendarBadges.map((b) => ({
+      id: b.id,
+      name: b.name,
+      minMinutes: Math.max(0, Number(b.minMinutes) || 0),
+      icon: b.icon || "",
+    }));
+
+    let firstDayOfWeek = "sun";
+    try {
+      const raw = localStorage.getItem(LS_CALENDAR_SETTINGS);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (
+          data &&
+          typeof data === "object" &&
+          (data.firstDayOfWeek === "sun" || data.firstDayOfWeek === "mon")
+        ) {
+          firstDayOfWeek = data.firstDayOfWeek;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    const toSave = { firstDayOfWeek, badges: cleaned };
+    localStorage.setItem(LS_CALENDAR_SETTINGS, JSON.stringify(toSave));
+    setStatusMsg("カレンダーのバッジ設定を保存しました。");
+  }
+
+  function handleFirstDayChange(value) {
+    setFirstDayOfWeek(value);
+    try {
+      const { badges } = loadCalendarSettingsFromStorage();
+      const toSave = { firstDayOfWeek: value, badges };
+      localStorage.setItem(LS_CALENDAR_SETTINGS, JSON.stringify(toSave));
+    } catch (e) {
+      console.warn("firstDayOfWeek save error", e);
+    }
+    setStatusMsg("カレンダーの週の始まりを変更しました。");
+  }
+
+  function handleGoLogin() {
+    localStorage.removeItem(LS_ROLE);
+    localStorage.removeItem(LS_PARENT_AUTHED);
+    localStorage.removeItem(LS_CURRENT_CHILD_ID);
+    window.location.href = ROUTE_LOGIN;
+  }
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "16px",
+        maxWidth: "960px",
+        margin: "0 auto",
+      }}
+    >
+      <h1 style={{ fontSize: "20px", fontWeight: 700, marginBottom: "12px" }}>
+        設定
+      </h1>
+
+      {statusMsg && (
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "8px 12px",
+            borderRadius: "999px",
+            backgroundColor: "#eef2ff",
+            color: "#3730a3",
+            fontSize: "13px",
+          }}
+        >
+          {statusMsg}
+        </div>
+      )}
+
+      {/* モード切り替え＋ログインに戻る */}
+      <section
+        style={{
+          marginBottom: "16px",
+          padding: "12px",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+          display: "flex",
+          alignItems: "center",
+          gap: "12px",
+          justifyContent: "space-between",
+        }}
+      >
+        <div>
+          <div style={{ fontSize: "13px", marginBottom: "4px" }}>
+            モード切り替え
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={() => handleRoleChange("parent")}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "999px",
+                border: "1px solid #e5e7eb",
+                marginRight: "8px",
+                backgroundColor: role === "parent" ? "#4f46e5" : "#fff",
+                color: role === "parent" ? "#fff" : "#111827",
+                fontSize: "13px",
+              }}
+            >
+              おとなモード
+            </button>
+            <button
+              type="button"
+              onClick={() => handleRoleChange("child")}
+              style={{
+                padding: "6px 12px",
+                borderRadius: "999px",
+                border: "1px solid #e5e7eb",
+                backgroundColor: role === "child" ? "#4f46e5" : "#fff",
+                color: role === "child" ? "#fff" : "#111827",
+                fontSize: "13px",
+              }}
+            >
+              こどもモード
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <button
+            type="button"
+            onClick={handleGoLogin}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "999px",
+              border: "1px solid #e5e7eb",
+              backgroundColor: "#fff",
+              fontSize: "13px",
+            }}
+          >
+            ログイン画面にもどる
+          </button>
+        </div>
+      </section>
+
+      {/* 表示言語＋大人の秘密コード */}
+      <section
+        style={{
+          marginBottom: "16px",
+          padding: "12px",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "12px",
+        }}
+      >
+        <div>
+          <div style={{ fontSize: "13px", marginBottom: "4px" }}>
+            表示言語
+          </div>
+          <select
+            value={lang}
+            onChange={(e) => handleLangChange(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "6px 8px",
+              borderRadius: "8px",
+              border: "1px solid #d1d5db",
+              fontSize: "13px",
+            }}
+          >
+            <option value="jp">日本語</option>
+            <option value="hiragana">にほんご（ひらがな）</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+
+        <div>
+          <div style={{ fontSize: "13px", marginBottom: "4px" }}>
+            大人のひみつコード
+          </div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <input
+              type="password"
+              value={parentCode}
+              onChange={(e) => setParentCode(e.target.value)}
+              style={{
+                flex: 1,
+                padding: "6px 8px",
+                borderRadius: "8px",
+                border: "1px solid #d1d5db",
+                fontSize: "13px",
+              }}
+            />
+            <button
+              type="button"
+              onClick={handleParentCodeSave}
+              style={{
+                padding: "6px 10px",
+                borderRadius: "999px",
+                border: "none",
+                backgroundColor: "#6366f1",
+                color: "#fff",
+                fontSize: "13px",
+              }}
+            >
+              保存
+            </button>
+          </div>
+          <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "4px" }}>
+            ※ こどもモードからおとなモードに戻るときに使います
+          </div>
+        </div>
+      </section>
+
+      {/* タスク設定 */}
+      <section
+        style={{
+          marginBottom: "16px",
+          padding: "12px",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <h2
+            style={{
+              fontSize: "14px",
+              fontWeight: 600,
+              marginBottom: "8px",
+            }}
+          >
+            タスクの設定
+          </h2>
+          <button
+            type="button"
+            onClick={handleAddTask}
+            style={{
+              padding: "4px 10px",
+              borderRadius: "999px",
+              border: "1px solid #e5e7eb",
+              backgroundColor: "#fff",
+              fontSize: "12px",
+            }}
+          >
+            タスクを追加
+          </button>
+        </div>
+
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            fontSize: "12px",
+            marginTop: "4px",
+          }}
+        >
+          <thead>
+            <tr>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "4px",
+                  borderBottom: "1px solid #e5e7eb",
+                }}
+              >
+                アイコン
+              </th>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "4px",
+                  borderBottom: "1px solid #e5e7eb",
+                }}
+              >
+                名前
+              </th>
+              <th
+                style={{
+                  width: "60px",
+                  textAlign: "center",
+                  padding: "4px",
+                  borderBottom: "1px solid #e5e7eb",
+                }}
+              >
+                削除
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((task) => (
+              <tr key={task.id}>
+                <td style={{ padding: "4px" }}>
+                  <input
+                    type="text"
+                    value={task.icon}
+                    onChange={(e) =>
+                      handleTaskChange(task.id, "icon", e.target.value)
+                    }
+                    style={{
+                      width: "40px",
+                      textAlign: "center",
+                      fontSize: "18px",
+                    }}
+                  />
+                </td>
+                <td style={{ padding: "4px" }}>
+                  <input
+                    type="text"
+                    value={task.label}
+                    onChange={(e) =>
+                      handleTaskChange(task.id, "label", e.target.value)
+                    }
+                    style={{
+                      width: "100%",
+                      padding: "4px 6px",
+                      borderRadius: "6px",
+                      border: "1px solid #d1d5db",
+                    }}
+                  />
+                </td>
+                <td style={{ textAlign: "center", padding: "4px" }}>
+                  <button
+                    type="button"
+                    onClick={() => handleTaskDelete(task.id)}
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: "999px",
+                      border: "none",
+                      backgroundColor: "#fee2e2",
+                      color: "#b91c1c",
+                      fontSize: "11px",
+                    }}
+                  >
+                    削除
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div
+          style={{ fontSize: "11px", color: "#6b7280", marginTop: "4px" }}
+        >
+          ※ 表示順はここで並んでいる順になります
+        </div>
+      </section>
+
+      {/* お子さま設定 */}
+      <section
+        style={{
+          marginBottom: "16px",
+          padding: "12px",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <h2
+            style={{
+              fontSize: "14px",
+              fontWeight: 600,
+              marginBottom: "8px",
+            }}
+          >
+            お子さまの設定
+          </h2>
+          <button
+            type="button"
+            onClick={handleAddChild}
+            style={{
+              padding: "4px 10px",
+              borderRadius: "999px",
+              border: "1px solid #e5e7eb",
+              backgroundColor: "#fff",
+              fontSize: "12px",
+            }}
+          >
+            お子さまを追加
+          </button>
+        </div>
+
+        {children.length === 0 && (
+          <div style={{ fontSize: "12px", color: "#6b7280" }}>
+            まずはお子さまを登録してください
+          </div>
+        )}
+
+        {children.map((child) => (
+          <div
+            key={child.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              marginBottom: "6px",
+            }}
+          >
+            <input
+              type="text"
+              value={child.name}
+              onChange={(e) =>
+                handleChildChange(child.id, "name", e.target.value)
+              }
+              style={{
+                flex: 1,
+                padding: "4px 6px",
+                borderRadius: "6px",
+                border: "1px solid #d1d5db",
+                fontSize: "13px",
+              }}
+            />
+            <input
+              type="text"
+              value={child.instrument || "🎻"}
+              onChange={(e) =>
+                handleChildChange(child.id, "instrument", e.target.value)
+              }
+              style={{
+                width: "40px",
+                textAlign: "center",
+                fontSize: "18px",
+              }}
+            />
+            <input
+              type="color"
+              value={child.color || "#6366f1"}
+              onChange={(e) =>
+                handleChildChange(child.id, "color", e.target.value)
+              }
+              style={{ width: "40px", height: "24px" }}
+            />
+            <button
+              type="button"
+              onClick={() => handleChildDelete(child.id)}
+              style={{
+                padding: "2px 8px",
+                borderRadius: "999px",
+                border: "none",
+                backgroundColor: "#fee2e2",
+                color: "#b91c1c",
+                fontSize: "11px",
+              }}
+            >
+              削除
+            </button>
+          </div>
+        ))}
+
+        <div
+          style={{ fontSize: "11px", color: "#6b7280", marginTop: "4px" }}
+        >
+          ※ こどもは最大5人まで登録できます
+        </div>
+      </section>
+
+      {/* カレンダーに表示するタスク */}
+      <section
+        style={{
+          marginBottom: "16px",
+          padding: "12px",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+        }}
+      >
+        <h2
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            marginBottom: "8px",
+          }}
+        >
+          カレンダーに表示するタスク
+        </h2>
+
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "6px",
+            fontSize: "12px",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => handleToggleCalendarTask("all")}
+            style={{
+              padding: "4px 10px",
+              borderRadius: "999px",
+              border: "1px solid #e5e7eb",
+              backgroundColor:
+                calendarTaskFilter.length === tasks.length
+                  ? "#4f46e5"
+                  : "#fff",
+              color:
+                calendarTaskFilter.length === tasks.length
+                  ? "#fff"
+                  : "#111827",
+            }}
+          >
+            すべて
+          </button>
+
+          {tasks.map((task) => {
+            const active = calendarTaskFilter.includes(task.id);
+            return (
+              <button
+                key={task.id}
+                type="button"
+                onClick={() => handleToggleCalendarTask(task.id)}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: "999px",
+                  border: "1px solid #e5e7eb",
+                  backgroundColor: active ? "#4f46e5" : "#fff",
+                  color: active ? "#fff" : "#111827",
+                }}
+              >
+                {task.icon} {task.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ marginTop: "8px" }}>
+          <button
+            type="button"
+            onClick={handleClearCalendarTaskFilter}
+            style={{
+              padding: "4px 10px",
+              borderRadius: "999px",
+              border: "none",
+              backgroundColor: "#f3f4f6",
+              fontSize: "12px",
+            }}
+          >
+            設定をクリア
+          </button>
+        </div>
+      </section>
+
+      {/* カレンダーのバッジ＋週の始まり */}
+      <section
+        style={{
+          marginBottom: "16px",
+          padding: "12px",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+        }}
+      >
+        <h2
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            marginBottom: "8px",
+          }}
+        >
+          カレンダー設定
+        </h2>
+
+        <div style={{ marginBottom: "12px", fontSize: "13px" }}>
+          <div style={{ marginBottom: "4px" }}>週の始まり</div>
+          <label style={{ marginRight: "12px" }}>
+            <input
+              type="radio"
+              name="firstDayOfWeek"
+              value="sun"
+              checked={firstDayOfWeek === "sun"}
+              onChange={() => handleFirstDayChange("sun")}
+            />{" "}
+            日曜はじまり
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="firstDayOfWeek"
+              value="mon"
+              checked={firstDayOfWeek === "mon"}
+              onChange={() => handleFirstDayChange("mon")}
+            />{" "}
+            月曜はじまり
+          </label>
+        </div>
+
+        <div style={{ fontSize: "13px" }}>
+          <div style={{ marginBottom: "4px" }}>
+            日ごとの合計練習時間に応じて表示するマーク
+          </div>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              marginTop: "4px",
+              fontSize: "12px",
+            }}
+          >
+            <thead>
+              <tr>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "4px",
+                    borderBottom: "1px solid #e5e7eb",
+                  }}
+                >
+                  名前
+                </th>
+                <th
+                  style={{
+                    textAlign: "right",
+                    padding: "4px",
+                    borderBottom: "1px solid #e5e7eb",
+                    width: "80px",
+                  }}
+                >
+                  何分以上
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "4px",
+                    borderBottom: "1px solid #e5e7eb",
+                    width: "70px",
+                  }}
+                >
+                  マーク
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {calendarBadges.map((b) => (
+                <tr key={b.id}>
+                  <td style={{ padding: "4px" }}>{b.name}</td>
+                  <td style={{ padding: "4px", textAlign: "right" }}>
+                    <input
+                      type="number"
+                      min={0}
+                      value={b.minMinutes}
+                      onChange={(e) =>
+                        handleChangeBadge(b.id, "minMinutes", e.target.value)
+                      }
+                      style={{
+                        width: "60px",
+                        fontSize: "12px",
+                        padding: "2px 4px",
+                      }}
+                    />{" "}
+                    分
+                  </td>
+                  <td style={{ padding: "4px" }}>
+                    <input
+                      type="text"
+                      value={b.icon}
+                      onChange={(e) =>
+                        handleChangeBadge(b.id, "icon", e.target.value)
+                      }
+                      style={{
+                        width: "50px",
+                        fontSize: "16px",
+                        textAlign: "center",
+                      }}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div
+            style={{
+              fontSize: "11px",
+              color: "#6b7280",
+              marginTop: "4px",
+            }}
+          >
+            ※ もっとも大きい「何分以上」を満たしたマークだけ表示されます
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleSaveCalendarBadges}
+          style={{
+            marginTop: "12px",
+            padding: "8px 16px",
+            borderRadius: "999px",
+            backgroundColor: "#6366f1",
+            color: "#fff",
+            border: "none",
+            fontSize: "13px",
+            fontWeight: 600,
+          }}
+        >
+          バッジ設定を保存
+        </button>
+      </section>
+
+      {/* 記録データ */}
+      <section
+        style={{
+          marginBottom: "16px",
+          padding: "12px",
+          borderRadius: "12px",
+          border: "1px solid #e5e7eb",
+          backgroundColor: "#fff",
+        }}
+      >
+        <h2
+          style={{
+            fontSize: "14px",
+            fontWeight: 600,
+            marginBottom: "8px",
+          }}
+        >
+          記録データ
+        </h2>
+
+        <div style={{ fontSize: "13px", marginBottom: "4px" }}>
+          現在の記録件数：{historyCount} 件
+        </div>
+
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={handleDownloadHistory}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "999px",
+              border: "1px solid #e5e7eb",
+              backgroundColor: "#fff",
+              fontSize: "12px",
+            }}
+          >
+            CSVでダウンロード
+          </button>
+
+          <button
+            type="button"
+            onClick={handleClearHistory}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "999px",
+              border: "none",
+              backgroundColor: "#fee2e2",
+              color: "#b91c1c",
+              fontSize: "12px",
+            }}
+          >
+            すべて削除
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}

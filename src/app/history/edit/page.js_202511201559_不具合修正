@@ -1,0 +1,365 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export default function HistoryEditPage() {
+  const [entryId, setEntryId] = useState(null);
+
+  // ロール（親 / 子）
+  const [role, setRole] = useState("parent");
+
+  // 親コードまわり
+  const [needAuth, setNeedAuth] = useState(false);
+  const [parentCodeInput, setParentCodeInput] = useState("");
+  const [parentCodeSaved, setParentCodeSaved] = useState("0000");
+
+  // 編集フィールド
+  const [task, setTask] = useState("");
+  const [minutes, setMinutes] = useState(""); // 分
+  const [count, setCount] = useState("");
+  const [memo, setMemo] = useState("");
+  const [startedAtStr, setStartedAtStr] = useState("");
+
+  const [statusMsg, setStatusMsg] = useState("");
+
+  // 1) URL から id を読む
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const idStr = params.get("id");
+    if (idStr !== null) {
+      const idx = parseInt(idStr, 10);
+      if (!isNaN(idx)) {
+        setEntryId(idx);
+      }
+    }
+  }, []);
+
+  // 2) ロール ＆ 親コードを読み込み
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const savedRole = window.localStorage.getItem("pocopoco_role");
+      if (savedRole === "child" || savedRole === "parent") {
+        setRole(savedRole);
+        // 子モードのときだけ認証を要求
+        setNeedAuth(savedRole === "child");
+      } else {
+        setRole("parent");
+        setNeedAuth(false);
+      }
+    } catch (e) {
+      console.error("role load error", e);
+      setRole("parent");
+      setNeedAuth(false);
+    }
+
+    try {
+      const savedCode =
+        window.localStorage.getItem("pocopoco_parentCode") || "0000";
+      setParentCodeSaved(savedCode);
+    } catch (e) {
+      console.error("parentCode load error", e);
+      setParentCodeSaved("0000");
+    }
+  }, []);
+
+  // 3) 該当レコードを読み込んでフォームにセット
+  useEffect(() => {
+    if (entryId === null || typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const all = JSON.parse(raw);
+      const rec = all[entryId];
+      if (!rec) return;
+
+      // 新旧どちらの項目でも拾う
+      setTask(rec.task_title || rec.task || "");
+      setMinutes(String(Math.floor((rec.seconds || 0) / 60)));
+      setCount(String(rec.count || 0));
+      setMemo(rec.memo || "");
+      setStartedAtStr(rec.startedAt || "");
+    } catch (e) {
+      console.error("history edit load error", e);
+    }
+  }, [entryId]);
+
+  // 親コードチェック（子モードのみ）
+  function handleAuthSubmit(e) {
+    e.preventDefault();
+    if (parentCodeInput === parentCodeSaved) {
+      setNeedAuth(false);
+      setStatusMsg("");
+    } else {
+      setStatusMsg("ひみつコードがちがいます。");
+    }
+  }
+
+  // 保存処理
+  function handleSave(e) {
+    e.preventDefault();
+    if (entryId === null || typeof window === "undefined") return;
+
+    try {
+      const raw = window.localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const all = JSON.parse(raw);
+
+      const newSeconds = parseInt(minutes, 10) * 60 || 0;
+      const newCount = parseInt(count, 10) || 0;
+
+      all[entryId] = {
+        ...all[entryId],
+        // 表示ロジックとそろえるため、両方を更新
+        task: task,
+        task_title: task,
+        seconds: newSeconds,
+        count: newCount,
+        memo: memo,
+        startedAt: startedAtStr,
+      };
+
+      window.localStorage.setItem("pocopoco_history", JSON.stringify(all));
+
+      // 保存後は履歴画面に戻る
+      window.location.href = "/history";
+    } catch (e) {
+      console.error("save error", e);
+      setStatusMsg("ほぞんで エラーがでました。");
+    }
+  }
+
+  // まだid読み込み中
+  if (entryId === null) {
+    return (
+      <div style={outerStyle}>
+        <div style={cardStyle}>よみこみちゅう…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={outerStyle}>
+      <div style={cardStyle}>
+        <h1
+          style={{
+            fontSize: "18px",
+            fontWeight: 700,
+            marginBottom: "12px",
+            color: "#6a1b9a",
+          }}
+        >
+          れんしゅうきろく を へんしゅう
+        </h1>
+
+        {/* 子モードのみ認証を表示 */}
+        {needAuth ? (
+          <>
+            <p
+              style={{
+                fontSize: "13px",
+                lineHeight: 1.4,
+                color: "#555",
+                marginBottom: "12px",
+              }}
+            >
+              この きろく を へんしゅうするには、
+              おうちのひとの 4けたコード が ひつようです。
+            </p>
+            <form onSubmit={handleAuthSubmit}>
+              <label style={labelStyle}>
+                4けたの ひみつコード
+                <input
+                  type="password"
+                  value={parentCodeInput}
+                  onChange={(e) => setParentCodeInput(e.target.value)}
+                  maxLength={4}
+                  style={textInputStyle}
+                  inputMode="numeric"
+                />
+              </label>
+              {statusMsg && (
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: "#d32f2f",
+                    marginTop: "4px",
+                    marginBottom: "8px",
+                  }}
+                >
+                  {statusMsg}
+                </div>
+              )}
+              <button type="submit" style={primaryButtonStyle}>
+                つづける
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            {role === "child" && (
+              <p
+                style={{
+                  fontSize: "11px",
+                  color: "#777",
+                  marginBottom: "8px",
+                }}
+              >
+                ※ おうちのひとが へんしゅうしています。
+              </p>
+            )}
+
+            <form onSubmit={handleSave}>
+              <label style={labelStyle}>
+                タスク
+                <input
+                  type="text"
+                  value={task}
+                  onChange={(e) => setTask(e.target.value)}
+                  style={textInputStyle}
+                />
+              </label>
+
+              <label style={labelStyle}>
+                じかん（分）
+                <input
+                  type="number"
+                  min={0}
+                  value={minutes}
+                  onChange={(e) => setMinutes(e.target.value)}
+                  style={textInputStyle}
+                />
+              </label>
+
+              <label style={labelStyle}>
+                かいすう
+                <input
+                  type="number"
+                  min={0}
+                  value={count}
+                  onChange={(e) => setCount(e.target.value)}
+                  style={textInputStyle}
+                />
+              </label>
+
+              <label style={labelStyle}>
+                メモ
+                <textarea
+                  value={memo}
+                  onChange={(e) => setMemo(e.target.value)}
+                  style={{ ...textInputStyle, minHeight: "80px" }}
+                />
+              </label>
+
+              <label style={labelStyle}>
+                はじめた じかん（そのままでもOK）
+                <input
+                  type="text"
+                  value={startedAtStr}
+                  onChange={(e) => setStartedAtStr(e.target.value)}
+                  style={textInputStyle}
+                  placeholder="2025-11-20T07:30:00.000Z など"
+                />
+              </label>
+
+              {statusMsg && (
+                <div
+                  style={{
+                    fontSize: "12px",
+                    color: "#d32f2f",
+                    marginTop: "4px",
+                    marginBottom: "8px",
+                  }}
+                >
+                  {statusMsg}
+                </div>
+              )}
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  marginTop: "12px",
+                  justifyContent: "flex-end",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => (window.location.href = "/history")}
+                  style={{
+                    ...secondaryButtonStyle,
+                  }}
+                >
+                  もどる
+                </button>
+                <button type="submit" style={primaryButtonStyle}>
+                  ほぞんする
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const outerStyle = {
+  minHeight: "100vh",
+  backgroundColor: "#f7f0ff",
+  padding: "16px",
+  boxSizing: "border-box",
+  fontFamily:
+    'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+};
+
+const cardStyle = {
+  maxWidth: "640px",
+  margin: "0 auto",
+  backgroundColor: "#fff",
+  borderRadius: "12px",
+  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+  padding: "16px",
+};
+
+const labelStyle = {
+  display: "block",
+  fontSize: "13px",
+  fontWeight: 600,
+  color: "#333",
+  marginBottom: "8px",
+};
+
+const textInputStyle = {
+  width: "100%",
+  border: "1px solid #bbb",
+  borderRadius: "8px",
+  fontSize: "14px",
+  padding: "8px 10px",
+  backgroundColor: "#fff",
+};
+
+const primaryButtonStyle = {
+  marginTop: "8px",
+  backgroundColor: "#6a1b9a",
+  color: "#fff",
+  border: "none",
+  borderRadius: "999px",
+  padding: "8px 16px",
+  fontSize: "14px",
+  fontWeight: 600,
+  cursor: "pointer",
+  boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
+};
+
+const secondaryButtonStyle = {
+  backgroundColor: "#fff",
+  color: "#6a1b9a",
+  border: "1px solid #6a1b9a",
+  borderRadius: "999px",
+  padding: "8px 16px",
+  fontSize: "14px",
+  fontWeight: 600,
+  cursor: "pointer",
+};

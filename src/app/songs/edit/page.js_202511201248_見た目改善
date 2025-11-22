@@ -1,0 +1,156 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+
+const STORAGE_KEY = "pocopoco_songs";   // ← 一覧画面と完全一致
+
+export default function SongEditPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // URL パラメータ
+  const childId = searchParams.get("childId");
+  const index = searchParams.get("index");
+
+  const [composer, setComposer] = useState("");
+  const [title, setTitle] = useState("");
+  const [performanceDate, setPerformanceDate] = useState("");
+  const [venue, setVenue] = useState("");
+  const [memo, setMemo] = useState("");
+
+  const [notFound, setNotFound] = useState(false);
+
+  // 初期読み込み
+  useEffect(() => {
+    if (!childId || index === null) {
+      setNotFound(true);
+      return;
+    }
+
+    if (typeof window === "undefined") return;
+
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      setNotFound(true);
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(raw);
+
+      if (!parsed[childId] || !parsed[childId][index]) {
+        setNotFound(true);
+        return;
+      }
+
+      const song = parsed[childId][index];
+
+      setComposer(song.composer || "");
+      setTitle(song.title || "");
+      setPerformanceDate(song.performanceDate || "");
+      setVenue(song.venue || "");
+      setMemo(song.memo || "");
+    } catch (e) {
+      console.error(e);
+      setNotFound(true);
+    }
+  }, [childId, index]);
+
+  // 保存
+  const handleSave = (e) => {
+    e.preventDefault();
+
+    if (!title.trim()) {
+      alert("曲名を入力してください。");
+      return;
+    }
+
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+
+    const parsed = JSON.parse(raw);
+
+    // 上書き保存
+    parsed[childId][index] = {
+      ...parsed[childId][index],
+      composer: composer.trim(),
+      title: title.trim(),
+      performanceDate,
+      venue: venue.trim(),
+      memo: memo.trim(),
+    };
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+
+    router.push(`/songs?childId=${childId}`);
+  };
+
+  const handleCancel = () => {
+    router.push(`/songs?childId=${childId}`);
+  };
+
+  return (
+    <div style={{ padding: 16 }}>
+      <h1 style={{ fontSize: 18, fontWeight: 700 }}>曲を編集</h1>
+
+      {notFound ? (
+        <div style={{ color: "#e11d48", marginTop: 20 }}>
+          編集対象の曲データが見つかりません。
+          <br />
+          <button onClick={handleCancel} style={{ marginTop: 12 }}>
+            曲リストに戻る
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleSave} style={{ marginTop: 20 }}>
+          <label>作曲者名</label>
+          <input
+            value={composer}
+            onChange={(e) => setComposer(e.target.value)}
+            style={{ width: "100%", marginBottom: 10 }}
+          />
+
+          <label>曲名 *</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            style={{ width: "100%", marginBottom: 10 }}
+          />
+
+          <label>発表日</label>
+          <input
+            type="date"
+            value={performanceDate}
+            onChange={(e) => setPerformanceDate(e.target.value)}
+            style={{ width: "100%", marginBottom: 10 }}
+          />
+
+          <label>発表場所</label>
+          <input
+            value={venue}
+            onChange={(e) => setVenue(e.target.value)}
+            style={{ width: "100%", marginBottom: 10 }}
+          />
+
+          <label>メモ</label>
+          <textarea
+            rows={3}
+            value={memo}
+            onChange={(e) => setMemo(e.target.value)}
+            style={{ width: "100%", marginBottom: 10 }}
+          />
+
+          <div style={{ display: "flex", gap: 10 }}>
+            <button type="button" onClick={handleCancel}>
+              キャンセル
+            </button>
+            <button type="submit">
+              更新
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}

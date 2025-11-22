@@ -1,0 +1,546 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  LS_CHILDREN,
+  LS_CURRENT_CHILD_ID,
+  LS_HISTORY,
+  LS_ROLE,
+  ROUTE_CALENDAR_SETTINGS,
+} from "@/app/constants";
+import {
+  toDayKey,
+  buildCalendarCells,
+  DEFAULT_BADGES,
+  loadCalendarSettingsFromStorage,
+  getBadgeFromSettings,
+  loadEvents,
+  loadCalendarTaskFilter,
+  loadTasksDict,
+  loadBirthday,
+  isBirthdayDay,
+  filterEventsForChild,
+  calcDailyMinutes,
+} from "@/app/lib/calendarUtils";
+import {
+  navBtnStyle,
+  settingsButtonStyle,
+} from "@/app/lib/calendarStyles";
+
+// ========================
+// サブコンポーネント
+// ========================
+
+function CalendarHeader({ monthLabel, onPrevMonth, onNextMonth }) {
+  return (
+    <header
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: "12px",
+      }}
+    >
+      <button onClick={onPrevMonth} style={navBtnStyle}>
+        ←
+      </button>
+      <div
+        style={{
+          fontSize: "16px",
+          fontWeight: 600,
+        }}
+      >
+        {monthLabel}
+      </div>
+      <button onClick={onNextMonth} style={navBtnStyle}>
+        →
+      </button>
+    </header>
+  );
+}
+
+function CalendarFilters({
+  childrenList,
+  role,
+  selectedChildId,
+  onChangeChildId,
+  calendarTaskFilter,
+  tasksDict,
+  calendarBadges,
+  onClickSettings,
+}) {
+  return (
+    <>
+      {/* 子どもセレクト（子モードでは非表示） */}
+      {childrenList.length > 0 && role !== "child" && (
+        <section
+          style={{
+            marginBottom: "12px",
+          }}
+        >
+          <select
+            value={selectedChildId}
+            onChange={(e) => onChangeChildId(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "6px 8px",
+              borderRadius: "8px",
+              border: "1px solid #cccccc",
+              fontSize: "13px",
+            }}
+          >
+            <option value="all">👪 みんなまとめて</option>
+            {childrenList.map((ch) => (
+              <option key={ch.id} value={ch.id}>
+                👶 {ch.name}
+              </option>
+            ))}
+          </select>
+        </section>
+      )}
+
+      {/* タスクフィルタ + バッジの意味 + 設定アイコン */}
+      <section
+        style={{
+          marginBottom: "12px",
+          fontSize: "12px",
+          color: "#555555",
+        }}
+      >
+        {/* 見出し（タスク側のみ） */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-start",
+            alignItems: "center",
+            marginBottom: "4px",
+          }}
+        >
+          <div
+            style={{
+              fontWeight: 600,
+            }}
+          >
+            カレンダーに反映するタスク
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "flex-start",
+            flexWrap: "wrap",
+          }}
+        >
+          {/* タスクフィルタ表示（左側） */}
+          <div
+            style={{
+              flex: "1 1 55%",
+            }}
+          >
+            {calendarTaskFilter && calendarTaskFilter.length > 0 ? (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: 0,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "4px",
+                }}
+              >
+                {calendarTaskFilter.map((id) => {
+                  const t = tasksDict.byId[id];
+                  if (!t) return null;
+                  return (
+                    <li
+                      key={id}
+                      style={{
+                        background: "#f3e5f5",
+                        borderRadius: "999px",
+                        padding: "2px 8px",
+                      }}
+                    >
+                      {t.icon || "🎵"} {t.label}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <div>（今のところ、全部のタスクを合計しています）</div>
+            )}
+          </div>
+
+          {/* バッジの意味（右側：横並び & 行末に設定アイコン） */}
+          <div
+            style={{
+              flex: "0 0 40%",
+              borderRadius: "12px",
+              background: "#ffffff",
+              padding: "8px 10px",
+              border: "1px solid #eeeeee",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: "6px",
+                fontSize: "12px",
+              }}
+            >
+              {calendarBadges.map((b) => (
+                <span
+                  key={b.id}
+                  style={{
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {b.icon} … {b.minMinutes}分～
+                </span>
+              ))}
+
+              <button
+                type="button"
+                aria-label="カレンダーのバッジ設定へ"
+                onClick={onClickSettings}
+                style={settingsButtonStyle}
+              >
+                ⚙️
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function CalendarGrid({
+  cells,
+  todayKey,
+  dailyMinutes,
+  calendarBadges,
+  birthday,
+  events,
+  selectedChildId,
+}) {
+  const visibleEvents = filterEventsForChild(events, selectedChildId);
+
+  function getEventsForDay(dayKey) {
+    return visibleEvents.filter((ev) => ev.date === dayKey);
+  }
+
+  return (
+    <section
+      style={{
+        borderRadius: "12px",
+        background: "#ffffff",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+        padding: "8px 8px 10px",
+        marginBottom: "12px",
+      }}
+    >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          fontSize: "11px",
+          textAlign: "center",
+          marginBottom: "4px",
+          color: "#666666",
+        }}
+      >
+        <div>日</div>
+        <div>月</div>
+        <div>火</div>
+        <div>水</div>
+        <div>木</div>
+        <div>金</div>
+        <div>土</div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          gap: "4px",
+          fontSize: "11px",
+        }}
+      >
+        {cells.map((c, idx) => {
+          if (!c) {
+            return <div key={idx} style={{ minHeight: "52px" }} />;
+          }
+          const dayKey = toDayKey(c);
+          const minutes = dailyMinutes[dayKey] || 0;
+          const badge = getBadgeFromSettings(minutes, calendarBadges);
+          const isToday = dayKey === todayKey;
+          const dayEvents = getEventsForDay(dayKey);
+          const isBday = isBirthdayDay(c, birthday);
+
+          return (
+            <div
+              key={idx}
+              style={{
+                minHeight: "52px",
+                borderRadius: "10px",
+                border: `1px solid ${badge.border}`,
+                background: badge.bg,
+                padding: "4px 3px",
+                position: "relative",
+                boxSizing: "border-box",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "2px",
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: isToday ? 700 : 500,
+                    color: isToday ? "#d32f2f" : "#333333",
+                    fontSize: "12px",
+                  }}
+                >
+                  {c.getDate()}
+                </div>
+                {isBday && (
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      color: "#e91e63",
+                    }}
+                  >
+                    🎂
+                  </span>
+                )}
+              </div>
+
+              {badge.label && (
+                <div
+                  style={{
+                    fontSize: "16px",
+                    textAlign: "center",
+                    lineHeight: 1,
+                    marginBottom: "2px",
+                  }}
+                >
+                  {badge.label}
+                </div>
+              )}
+
+              {minutes > 0 && (
+                <div
+                  style={{
+                    fontSize: "10px",
+                    color: badge.text,
+                    textAlign: "center",
+                  }}
+                >
+                  {minutes}分
+                </div>
+              )}
+
+              {dayEvents.length > 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: "3px",
+                    bottom: "2px",
+                    fontSize: "10px",
+                  }}
+                >
+                  {dayEvents.slice(0, 2).map((ev) => (
+                    <span key={ev.id} style={{ marginRight: "2px" }}>
+                      {ev.mark || "📅"}
+                    </span>
+                  ))}
+                  {dayEvents.length > 2 && (
+                    <span style={{ fontSize: "9px" }}>
+                      +{dayEvents.length - 2}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+// ========================
+// コンポーネント本体
+// ========================
+
+export default function CalendarPage() {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [month, setMonth] = useState(() => new Date().getMonth());
+  const [dailyMinutes, setDailyMinutes] = useState({});
+  const [events, setEvents] = useState([]);
+  const [birthday, setBirthday] = useState("");
+  const [calendarTaskFilter, setCalendarTaskFilter] = useState(null);
+  const [tasksDict, setTasksDict] = useState({ byId: {}, byLabel: {} });
+  const [children, setChildren] = useState([]);
+  const [selectedChildId, setSelectedChildId] = useState("all");
+  const [history, setHistory] = useState([]);
+  const [calendarBadges, setCalendarBadges] = useState(DEFAULT_BADGES);
+  const [role, setRole] = useState("parent");
+
+  const todayKey = toDayKey(new Date());
+  const cells = buildCalendarCells(year, month);
+  const monthLabel = `${year}年 ${month + 1}月`;
+
+  // 初期ロード
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // イベント
+    const evs = loadEvents();
+    setEvents(evs);
+
+    // タスクフィルタ
+    const filter = loadCalendarTaskFilter();
+    setCalendarTaskFilter(filter);
+
+    // タスク辞書
+    const dict = loadTasksDict();
+    setTasksDict(dict);
+
+    // 誕生日
+    setBirthday(loadBirthday());
+
+    // 子ども
+    try {
+      const rawChildren = window.localStorage.getItem(LS_CHILDREN);
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) setChildren(arr);
+      }
+    } catch (e) {
+      console.warn("calendar children load error", e);
+    }
+
+    // 選択中の子
+    const savedChild = window.localStorage.getItem(LS_CURRENT_CHILD_ID);
+    if (savedChild) setSelectedChildId(savedChild);
+
+    // ロール（parent / child）
+    try {
+      const savedRole = window.localStorage.getItem(LS_ROLE);
+      if (savedRole) setRole(savedRole);
+    } catch (e) {
+      console.warn("calendar role load error", e);
+    }
+
+    // 履歴
+    try {
+      const rawHistory = window.localStorage.getItem(LS_HISTORY);
+      if (rawHistory) {
+        const arr = JSON.parse(rawHistory);
+        if (Array.isArray(arr)) {
+          setHistory(arr);
+          const mins = calcDailyMinutes(
+            arr,
+            filter,
+            dict.byLabel,
+            savedChild || "all"
+          );
+          setDailyMinutes(mins);
+        }
+      }
+    } catch (e) {
+      console.warn("calendar history load error", e);
+    }
+
+    // バッジ設定
+    const badges = loadCalendarSettingsFromStorage();
+    setCalendarBadges(badges);
+  }, []);
+
+  // フィルタや子ども変更時の再計算
+  useEffect(() => {
+    if (!history || history.length === 0) return;
+    const mins = calcDailyMinutes(
+      history,
+      calendarTaskFilter,
+      tasksDict.byLabel,
+      selectedChildId
+    );
+    setDailyMinutes(mins);
+  }, [history, calendarTaskFilter, tasksDict, selectedChildId]);
+
+  function goPrevMonth() {
+    setMonth((m) => {
+      const newM = m - 1;
+      if (newM < 0) {
+        setYear((y) => y - 1);
+        return 11;
+      }
+      return newM;
+    });
+  }
+
+  function goNextMonth() {
+    setMonth((m) => {
+      const newM = m + 1;
+      if (newM > 11) {
+        setYear((y) => y + 1);
+        return 0;
+      }
+      return newM;
+    });
+  }
+
+  function handleClickSettings() {
+    if (typeof window === "undefined") return;
+    window.location.href = ROUTE_CALENDAR_SETTINGS;
+  }
+
+  return (
+    <main
+      style={{
+        padding: "16px 12px 80px",
+        maxWidth: "520px",
+        margin: "0 auto",
+        fontFamily: "system-ui, sans-serif",
+      }}
+    >
+      <CalendarHeader
+        monthLabel={monthLabel}
+        onPrevMonth={goPrevMonth}
+        onNextMonth={goNextMonth}
+      />
+
+      <CalendarFilters
+        childrenList={children}
+        role={role}
+        selectedChildId={selectedChildId}
+        onChangeChildId={setSelectedChildId}
+        calendarTaskFilter={calendarTaskFilter}
+        tasksDict={tasksDict}
+        calendarBadges={calendarBadges}
+        onClickSettings={handleClickSettings}
+      />
+
+      <CalendarGrid
+        cells={cells}
+        todayKey={todayKey}
+        dailyMinutes={dailyMinutes}
+        calendarBadges={calendarBadges}
+        birthday={birthday}
+        events={events}
+        selectedChildId={selectedChildId}
+      />
+    </main>
+  );
+}

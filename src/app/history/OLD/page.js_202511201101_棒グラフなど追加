@@ -1,0 +1,447 @@
+"use client";
+
+import { useEffect, useState } from "react";
+
+export default function HistoryPage() {
+  const [records, setRecords] = useState([]);
+  const [summary, setSummary] = useState({
+    totalMinutes: 0,
+    totalCount: 0,
+    todayCount: 0,
+  });
+  const [taskDict, setTaskDict] = useState({}); // task_id -> label 用
+
+  // ★ A-6: 子ども一覧と、表示中の子
+  const [children, setChildren] = useState([]);
+  const [currentChildId, setCurrentChildId] = useState("all");
+
+  // ★ ロール（親 / 子）
+  const [role, setRole] = useState("parent");
+
+  useEffect(() => {
+    // タスク名解決用
+    loadTasksForNameResolve();
+
+    // 子ども一覧と表示中の子を読む
+    try {
+      const rawChildren = localStorage.getItem("pocopoco_children");
+      if (rawChildren) {
+        const arr = JSON.parse(rawChildren);
+        if (Array.isArray(arr)) {
+          setChildren(arr);
+        }
+      }
+      const savedCurrentChild = localStorage.getItem("pocopoco_current_child_id");
+      if (savedCurrentChild) {
+        setCurrentChildId(savedCurrentChild); // 初期表示は「設定で今見てる子」
+      }
+    } catch (e) {
+      console.warn("failed to load children", e);
+    }
+
+    // ロールを読む
+    try {
+      const savedRole = localStorage.getItem("pocopoco_role");
+      if (savedRole === "child" || savedRole === "parent") {
+        setRole(savedRole);
+      }
+    } catch (e) {
+      console.warn("failed to load role", e);
+    }
+
+    // 履歴を読む
+    loadHistory();
+  }, []);
+
+  // 子どもを切り替えたらサマリーを再計算
+  useEffect(() => {
+    recalcSummaryForCurrentChild(records, currentChildId);
+  }, [currentChildId, records]);
+
+  // 設定画面で保存してあるタスクを読む（id→labelの辞書を作る）
+  function loadTasksForNameResolve() {
+    try {
+      const raw = localStorage.getItem("pocopoco_tasks");
+      if (!raw) return;
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return;
+      const dict = {};
+      list.forEach((t) => {
+        if (t.id) {
+          dict[t.id] = t.label || t.name || t.id;
+        }
+      });
+      setTaskDict(dict);
+    } catch (e) {
+      console.warn("failed to load tasks for history name mapping", e);
+    }
+  }
+
+  // localStorage から履歴を読み込み
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem("pocopoco_history");
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return;
+      setRecords(data);
+      // 読み込んだ時点でいまの子でサマリーを計算
+      recalcSummaryForCurrentChild(data, currentChildId);
+    } catch (e) {
+      console.error("failed to load history", e);
+    }
+  }
+
+  // 子どもで絞り込んで合計時間・回数を集計（きょう分のみ）
+  function recalcSummaryForCurrentChild(allRecords, targetChildId) {
+    const today = new Date().toISOString().slice(0, 10);
+    const todayRecords = allRecords.filter((r) => {
+      if (!r.startedAt?.startsWith(today)) return false;
+      // "all" か、もしくは child_id が一致するものだけ
+      if (targetChildId === "all") return true;
+      return (r.child_id || "") === targetChildId;
+    });
+
+    const totalSeconds = todayRecords.reduce(
+      (sum, r) => sum + (r.seconds || 0),
+      0
+    );
+    const totalCount = todayRecords.reduce(
+      (sum, r) => sum + (r.count || 0),
+      0
+    );
+
+    setSummary({
+      totalMinutes: Math.floor(totalSeconds / 60),
+      totalCount,
+      todayCount: todayRecords.length,
+    });
+  }
+
+  // 日付をきれいに表示
+  function formatDate(dateStr) {
+    if (!dateStr) return "";
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleString("ja-JP", {
+        month: "long",
+        day: "numeric",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return dateStr;
+    }
+  }
+
+  // タスク名を複数パターンから取る
+  function getTaskTitle(record) {
+    // 新: task_title があればそれを使う
+    if (record.task_title) return record.task_title;
+    // 旧: task があればそれを使う
+    if (record.task) return record.task;
+    // task_id があって、辞書にあるなら拾う
+    if (record.task_id && taskDict[record.task_id]) {
+      return taskDict[record.task_id];
+    }
+    // 何もなければプレースホルダ
+    return "タスク不明";
+  }
+
+  // 親なら編集へ、子なら何もしない（もしくはアラートだけ）
+  function handleEditClick(originalIndex) {
+    if (role !== "parent") {
+      alert("このきろくの編集は おとなだけができます。");
+      return;
+    }
+    // 親コードが設定されている家庭ならここでチェックしてもいいけど、
+    // 今回は画面遷移のみ
+    window.location.href = `/history/edit?id=${originalIndex}`;
+  }
+
+  // 今選択してる子どもで絞った履歴
+  const filteredRecords =
+    currentChildId === "all"
+      ? records
+      : records.filter((r) => (r.child_id || "") === currentChildId);
+
+  // 表示用に reverse して新しい順にする
+  const decoratedList = filteredRecords
+    .map((r, originalIndex) => ({
+      originalIndex,
+      record: r,
+    }))
+    .reverse();
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "500px",
+        margin: "0 auto",
+      }}
+    >
+      <header style={{ marginBottom: "16px" }}>
+        <h2 style={{ fontSize: "20px", marginBottom: "4px", color: "#4a148c" }}>
+          練習のきろく
+        </h2>
+        <p style={{ fontSize: "13px", color: "#777" }}>
+          ほぞんされた れんしゅうの きろくです
+        </p>
+        {role === "child" && (
+          <p style={{ fontSize: "11px", color: "#c06", marginTop: "4px" }}>
+            ※ いまは「子モード」です。編集はできません。
+          </p>
+        )}
+      </header>
+
+      {/* 子ども切替 */}
+      {children.length > 0 && (
+        <div
+          style={{
+            marginBottom: "14px",
+            display: "flex",
+            gap: "6px",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            onClick={() => setCurrentChildId("all")}
+            style={{
+              border:
+                currentChildId === "all" ? "1px solid #6a1b9a" : "1px solid #ccc",
+              background: "#fff",
+              borderRadius: "999px",
+              padding: "4px 10px",
+              fontSize: "12px",
+            }}
+          >
+            ぜんいん
+          </button>
+          {children.map((ch) => (
+            <button
+              key={ch.id}
+              onClick={() => setCurrentChildId(ch.id)}
+              style={{
+                border:
+                  currentChildId === ch.id
+                    ? "1px solid #6a1b9a"
+                    : "1px solid #ccc",
+                background: "#fff",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                fontSize: "12px",
+              }}
+            >
+              {ch.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 今日のサマリー */}
+      <section
+        style={{
+          background:
+            "linear-gradient(135deg, rgba(240,230,255,0.9), rgba(230,245,255,0.8))",
+          border: "1px solid #e0ccff",
+          borderRadius: "12px",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+          padding: "16px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3
+          style={{
+            fontSize: "16px",
+            marginBottom: "8px",
+            color: "#6a1b9a",
+          }}
+        >
+          きょうのまとめ
+        </h3>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          合計時間：<strong>{summary.totalMinutes}</strong>分
+        </p>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          合計回数：<strong>{summary.totalCount}</strong>回
+        </p>
+        <p style={{ fontSize: "14px", margin: "4px 0", color: "#333" }}>
+          けんすう：<strong>{summary.todayCount}</strong>件
+        </p>
+      </section>
+
+      {/* 履歴一覧 */}
+      <section>
+        <h3
+          style={{
+            fontSize: "16px",
+            marginBottom: "12px",
+            color: "#6a1b9a",
+          }}
+        >
+          {currentChildId === "all" ? "ぜんたいのきろく" : "この子のきろく"}
+        </h3>
+
+        {decoratedList.length === 0 ? (
+          <p style={{ fontSize: "14px", color: "#777" }}>
+            まだきろくがありません。
+          </p>
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
+            {decoratedList.map(({ originalIndex, record }) => {
+              const taskTitle = getTaskTitle(record);
+              const minutes = Math.floor((record.seconds || 0) / 60);
+
+              return (
+                <div
+                    key={originalIndex}
+                    style={{
+                      border: "1px solid #ddd",
+                      borderRadius: "10px",
+                      backgroundColor: "#fff",
+                      padding: "12px",
+                      boxShadow: "0 2px 4px rgba(0,0,0,0.05)",
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      columnGap: "8px",
+                    }}
+                  >
+                  {/* 左側：内容 */}
+                  <div
+                    style={{
+                      fontSize: "13px",
+                      lineHeight: 1.4,
+                      color: "#333",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "13px",
+                        color: "#999",
+                        marginBottom: "4px",
+                      }}
+                    >
+                      {formatDate(record.startedAt)}
+                    </div>
+
+                    {/* 子ども名も表示しておくとわかりやすい */}
+                    {currentChildId === "all" && record.child_id && (
+                      <div
+                        style={{
+                          fontSize: "11px",
+                          color: "#6a1b9a",
+                          marginBottom: "2px",
+                        }}
+                      >
+                        {renderChildNameFromId(record.child_id, children)}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        fontSize: "15px",
+                        fontWeight: "600",
+                        color: "#4a148c",
+                      }}
+                    >
+                      {taskTitle}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        color: "#333",
+                      }}
+                    >
+                      ⏱ {minutes}分 ／ 🎯 {record.count || 0}回
+                    </div>
+
+                    {record.memo && (
+                      <div
+                        style={{
+                          marginTop: "6px",
+                          fontSize: "13px",
+                          color: "#555",
+                          background: "#fafafa",
+                          borderRadius: "6px",
+                          padding: "6px 8px",
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        📝 {record.memo}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 右側：編集ボタン（親だけ） */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "flex-start",
+                      alignItems: "flex-end",
+                    }}
+                  >
+                    {role === "parent" && (
+                      <button
+                        onClick={() => handleEditClick(originalIndex)}
+                        style={{
+                          backgroundColor: "#6a1b9a",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: "8px",
+                          padding: "8px 10px",
+                          fontSize: "12px",
+                          fontWeight: "600",
+                          lineHeight: 1.2,
+                          minWidth: "60px",
+                          boxShadow: "0 2px 4px rgba(0,0,0,0.15)",
+                        }}
+                      >
+                        編集
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* 戻るボタン */}
+      <div style={{ marginTop: "24px", textAlign: "center" }}>
+        <button
+          onClick={() => (window.location.href = "/")}
+          style={{
+            backgroundColor: "#6a1b9a",
+            color: "#fff",
+            border: "none",
+            borderRadius: "8px",
+            fontSize: "15px",
+            fontWeight: "600",
+            padding: "10px 20px",
+          }}
+        >
+          ホームにもどる
+        </button>
+      </div>
+    </main>
+  );
+}
+
+// 子どもIDから名前を引く小さいヘルパ
+function renderChildNameFromId(childId, children) {
+  const found = children.find((c) => c.id === childId);
+  return found ? found.name : childId;
+}

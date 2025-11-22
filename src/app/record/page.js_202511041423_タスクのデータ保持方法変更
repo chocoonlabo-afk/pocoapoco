@@ -1,0 +1,323 @@
+"use client";
+
+import { useEffect, useState, useRef } from "react";
+import { useSearchParams } from "next/navigation";
+import { getLangFromStorage, t } from "../../lib/i18n";
+
+export default function RecordPage() {
+  const searchParams = useSearchParams();
+  const taskFromQuery = searchParams.get("task") || "";
+  const [lang, setLang] = useState("jp");
+  const [isRunning, setIsRunning] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [count, setCount] = useState(0);
+  const [memo, setMemo] = useState("");
+  const [startedAt, setStartedAt] = useState("");
+  const [taskName, setTaskName] = useState(taskFromQuery);
+  const intervalRef = useRef(null);
+
+  useEffect(() => {
+    const currentLang = getLangFromStorage();
+    setLang(currentLang);
+    if (!taskFromQuery && !taskName) setTaskName("バイオリン");
+  }, [taskFromQuery, taskName]);
+
+  function getTodayCount() {
+    try {
+      const raw = localStorage.getItem("pocopoco_history");
+      if (!raw) return 0;
+      const data = JSON.parse(raw);
+      const today = new Date().toISOString().slice(0, 10);
+      return data.filter((r) => r.startedAt?.startsWith(today)).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  function handleStart() {
+    if (isRunning || isFinished) return;
+
+    const todayCount = getTodayCount();
+    if (todayCount >= 20) {
+      alert("きょうは 20件 までです。あしたまたがんばろう！");
+      return;
+    }
+
+    setIsRunning(true);
+    setElapsedSec(0);
+    setCount(0);
+    setMemo("");
+    setIsFinished(false);
+    setStartedAt(new Date().toISOString());
+
+    intervalRef.current = setInterval(() => {
+      setElapsedSec((prev) => prev + 1);
+    }, 1000);
+  }
+
+  function handleIncrementCount() {
+    if (isRunning) setCount((c) => c + 1);
+  }
+
+  function handleStop() {
+    if (!isRunning) return;
+    clearInterval(intervalRef.current);
+    intervalRef.current = null;
+    setIsRunning(false);
+    setIsFinished(true);
+  }
+
+  function handleSave() {
+    if (!isFinished) return;
+    saveSessionToLocalHistory({
+      task: taskName,
+      seconds: elapsedSec,
+      count,
+      memo,
+      startedAt,
+    });
+    alert("きろくしました。おつかれさま！");
+    window.location.href = "/";
+  }
+
+  useEffect(() => {
+    return () => clearInterval(intervalRef.current);
+  }, []);
+
+  function saveSessionToLocalHistory(newRecord) {
+    try {
+      const raw = localStorage.getItem("pocopoco_history");
+      let arr = [];
+      if (raw) {
+        arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) arr = [];
+      }
+      arr.push(newRecord);
+      localStorage.setItem("pocopoco_history", JSON.stringify(arr));
+    } catch (e) {
+      console.error("failed to save history", e);
+    }
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSec / 60);
+  const elapsedSecondsOnly = elapsedSec % 60;
+
+  return (
+    <main
+      style={{
+        fontFamily: "system-ui, sans-serif",
+        padding: "24px 16px 80px",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      {/* ヘッダー */}
+      <header style={{ marginBottom: "16px" }}>
+        <div style={{ fontSize: "14px", color: "#666", marginBottom: "4px" }}>
+          {taskName || "れんしゅう"}
+        </div>
+        <div style={{ fontSize: "13px", color: "#999" }}>
+          {new Date().toLocaleDateString("ja-JP", {
+            month: "long",
+            day: "numeric",
+            weekday: "short",
+          })}
+        </div>
+      </header>
+
+      {/* 経過時間＋回数 */}
+      <section
+        style={{
+          border: "1px solid #e0ccff",
+          background:
+            "linear-gradient(135deg, rgba(255,240,255,0.9), rgba(245,230,255,0.8))",
+          borderRadius: "12px",
+          boxShadow: "0 2px 4px rgba(0,0,0,0.06)",
+          padding: "16px",
+          marginBottom: "16px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-end",
+            marginBottom: "12px",
+            flexWrap: "wrap",
+            rowGap: "12px",
+          }}
+        >
+          {/* 時間 */}
+          <div style={{ flex: "1 1 45%" }}>
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#6a1b9a",
+                marginBottom: "4px",
+              }}
+            >
+              時間
+            </div>
+            <div
+              style={{
+                fontSize: "24px",
+                fontWeight: "700",
+                color: "#6a1b9a",
+              }}
+            >
+              {elapsedMinutes}:{String(elapsedSecondsOnly).padStart(2, "0")}
+            </div>
+          </div>
+
+          {/* 回数 */}
+          <div style={{ flex: "1 1 45%", textAlign: "right" }}>
+            <div
+              style={{
+                fontSize: "12px",
+                color: "#6a1b9a",
+                marginBottom: "4px",
+              }}
+            >
+              回数
+            </div>
+            <div
+              style={{
+                fontSize: "24px",
+                fontWeight: "700",
+                color: "#6a1b9a",
+              }}
+            >
+              {count}
+            </div>
+            <button
+              onClick={handleIncrementCount}
+              disabled={!isRunning}
+              style={{
+                marginTop: "6px",
+                backgroundColor: isRunning ? "#6a1b9a" : "#bbb",
+                color: "#fff",
+                border: "none",
+                borderRadius: "8px",
+                fontSize: "13px",
+                padding: "6px 10px",
+              }}
+            >
+              +1 かぞえる
+            </button>
+          </div>
+        </div>
+
+        {/* ボタン群 */}
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+          {!isRunning && !isFinished && (
+            <button
+              onClick={handleStart}
+              style={{
+                flex: "1",
+                background:
+                  "linear-gradient(90deg, rgb(204,0,255), rgb(255,102,153))",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "600",
+                padding: "12px",
+              }}
+            >
+              練習開始 ▶
+            </button>
+          )}
+
+          {isRunning && (
+            <button
+              onClick={handleStop}
+              style={{
+                flex: "1",
+                backgroundColor: "#ff5757",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "600",
+                padding: "12px",
+              }}
+            >
+              練習おわり ✋
+            </button>
+          )}
+
+          {isFinished && (
+            <button
+              onClick={handleSave}
+              style={{
+                flex: "1",
+                backgroundColor: "#6a1b9a",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "600",
+                padding: "12px",
+              }}
+            >
+              このきろくをほぞん 💾
+            </button>
+          )}
+
+          <button
+            onClick={() => (window.location.href = "/")}
+            style={{
+              flex: "1",
+              backgroundColor: "#aaa",
+              color: "#fff",
+              border: "none",
+              borderRadius: "10px",
+              fontSize: "14px",
+              fontWeight: "600",
+              padding: "12px",
+            }}
+          >
+            もどる
+          </button>
+        </div>
+      </section>
+
+      {/* メモ欄 */}
+      <section
+        style={{
+          border: "1px solid #ddd",
+          borderRadius: "12px",
+          backgroundColor: "#fff",
+          padding: "16px",
+        }}
+      >
+        <label
+          style={{
+            display: "block",
+            fontSize: "14px",
+            fontWeight: "600",
+            marginBottom: "8px",
+          }}
+        >
+          メモ
+        </label>
+        <textarea
+          rows={3}
+          value={memo}
+          onChange={(e) => setMemo(e.target.value)}
+          placeholder="なにを がんばった？"
+          style={{
+            width: "100%",
+            border: "1px solid #bbb",
+            borderRadius: "8px",
+            fontSize: "14px",
+            padding: "10px 12px",
+            lineHeight: 1.4,
+            resize: "vertical",
+          }}
+        />
+      </section>
+    </main>
+  );
+}
