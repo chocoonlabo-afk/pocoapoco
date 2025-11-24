@@ -454,7 +454,7 @@ function WeeklyBoardPageInner() {
       (weekStart === "sun" && dayKey === "sun");
 
     return {
-      borderBottom: isActive ? "2px solid #a855f7" : "1px solid "#eee",
+      borderBottom: isActive ? "2px solid #a855f7" : "1px solid #eee",
       padding: "6px 4px",
       textAlign: "center",
       minWidth: "70px",
