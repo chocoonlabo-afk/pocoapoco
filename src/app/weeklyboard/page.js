@@ -1,9 +1,9 @@
 // src/app/weeklyboard/page.js
 "use client";
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 export const fetchCache = "default-no-store";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   LS_CHILDREN,
@@ -102,7 +102,7 @@ const getDayLabel = (dayKey, lang) => {
   return t(dictKey, lang);
 };
 
-export default function WeeklyBoardPage() {
+function WeeklyBoardPageInner() {
   const searchParams = useSearchParams();
 
   const [children, setChildren] = useState([]);
@@ -347,9 +347,7 @@ export default function WeeklyBoardPage() {
       return;
     }
 
-    const header = headerRaw.map((h) =>
-      h.replace(/["']/g, "").trim()
-    );
+    const header = headerRaw.map((h) => h.replace(/["']/g, "").trim());
 
     // ② タイトル（ヘッダー）が期待どおりかチェック
     const expectedDayOrder = getDayOrder(uiWeekStart);
@@ -456,7 +454,7 @@ export default function WeeklyBoardPage() {
       (weekStart === "sun" && dayKey === "sun");
 
     return {
-      borderBottom: isActive ? "2px solid #a855f7" : "1px solid #eee",
+      borderBottom: isActive ? "2px solid #a855f7" : "1px solid "#eee",
       padding: "6px 4px",
       textAlign: "center",
       minWidth: "70px",
@@ -615,5 +613,13 @@ export default function WeeklyBoardPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function WeeklyBoardPage() {
+  return (
+    <Suspense fallback={<div />}>
+      <WeeklyBoardPageInner />
+    </Suspense>
   );
 }
