@@ -10,7 +10,7 @@ export default function RootLayout({ children }) {
   const pathname = usePathname();
   const [role, setRole] = useState("parent");
 
-  // ロールをローカルストレージから読む
+  // ロール読込（初回 + ルート切替時のみ実行）
   useEffect(() => {
     try {
       const saved = localStorage.getItem("pocopoco_role");
@@ -18,21 +18,21 @@ export default function RootLayout({ children }) {
         setRole(saved);
       }
     } catch (e) {
-      // 何もしない（初期はparent扱い）
+      // 何もしない：初期はparent扱い
     }
   }, [pathname]);
 
-  // このパスではタブを表示しない
+  // 特定ページではタブを非表示にする
   const hiddenTabRoutes = ["/login"];
   const hideTabs = hiddenTabRoutes.some((p) => pathname?.startsWith(p));
 
-  // タブ定義（ここから子の場合は設定を消す）
+  // フッターのタブ
   const baseTabs = [
     { href: "/", label: "ホーム", emoji: "🏠" },
     { href: "/history", label: "履歴", emoji: "📜" },
     { href: "/calendar", label: "カレンダー", emoji: "📅" },
-    { href: "/weeklyboard", label: "週間ボード", emoji: "🗂️" },  // ★ 追加
-    { href: "/songs", label: "曲リスト", emoji: "🎵" }, // ← 追加
+    { href: "/weeklyboard", label: "週間ボード", emoji: "🗂️" },
+    { href: "/songs", label: "曲リスト", emoji: "🎵" },
     { href: "/settings", label: "設定", emoji: "⚙️" },
   ];
 
@@ -48,17 +48,15 @@ export default function RootLayout({ children }) {
           fontFamily: "system-ui, sans-serif",
           backgroundColor: "#fafafa",
           minHeight: "100vh",
-          margin: 0,
-          padding: 0,
           display: "flex",
           flexDirection: "column",
         }}
       >
-        {/* コンテンツ本体 */}
+        {/* メインコンテンツ */}
         <div
           style={{
             flex: 1,
-            paddingBottom: hideTabs ? 0 : "64px", // タブぶんの余白（ログインではなし）
+            paddingBottom: hideTabs ? 0 : "64px",
             maxWidth: "480px",
             width: "100%",
             margin: "0 auto",
@@ -67,7 +65,7 @@ export default function RootLayout({ children }) {
           {children}
         </div>
 
-        {/* 固定フッターナビ（ログインでは出さない） */}
+        {/* フッターナビ（ログイン画面は非表示） */}
         {!hideTabs && (
           <nav
             style={{
@@ -96,7 +94,6 @@ export default function RootLayout({ children }) {
               }}
             >
               {tabs.map((tab) => {
-                // "/" と "/history" みたいな時の一致をゆるくするなら startsWith にしてもOK
                 const active = pathname === tab.href;
                 return (
                   <Link
@@ -104,20 +101,20 @@ export default function RootLayout({ children }) {
                     href={tab.href}
                     style={{
                       textDecoration: "none",
-                      fontSize: "12px",
                       color: active ? "#6a00a0" : "#444",
                       fontWeight: active ? "600" : "400",
                       display: "flex",
                       flexDirection: "column",
                       alignItems: "center",
                       minWidth: "64px",
+                      fontSize: "12px",
                     }}
                   >
                     <span
                       style={{
                         fontSize: "20px",
-                        lineHeight: 1.2,
                         marginBottom: "4px",
+                        lineHeight: 1.2,
                       }}
                     >
                       {tab.emoji}
