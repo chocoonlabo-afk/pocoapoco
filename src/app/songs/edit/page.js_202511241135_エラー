@@ -1,15 +1,14 @@
-// src/app/songs/edit/page.js
 "use client";
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 export const fetchCache = "default-no-store";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState } from "react";
 import { t as translate, getLangFromStorage } from "../../lib/i18n";
 import { useSearchParams, useRouter } from "next/navigation";
 
 const SONGS_KEY = "pocopoco_songs";
 
-function EditSongPageInner() {
+export default function EditSongPage() {
   const router = useRouter();
   const params = useSearchParams();
 
@@ -99,7 +98,7 @@ function EditSongPageInner() {
             background: "#fff",
             borderRadius: "16px",
             padding: "24px",
-            border: "1px solid "#eee",
+            border: "1px solid #eee",
             color: "red",
             fontSize: "15px",
           }}
@@ -136,7 +135,7 @@ function EditSongPageInner() {
           background: "#fff",
           padding: "24px",
           borderRadius: "16px",
-          border: "1px solid "#eee",
+          border: "1px solid #eee",
         }}
       >
         {/* 作曲者 */}
@@ -158,9 +157,7 @@ function EditSongPageInner() {
         />
 
         {/* 日付 */}
-        <label style={{ fontSize: "14px", marginTop: "18px" }}>
-          {t("songsHeaderDate")}
-        </label>
+        <label style={{ fontSize: "14px", marginTop: "18px" }}>{t("songsHeaderDate")}</label>
         <input
           type="date"
           value={date}
@@ -169,9 +166,7 @@ function EditSongPageInner() {
         />
 
         {/* 場所 */}
-        <label style={{ fontSize: "14px", marginTop: "18px" }}>
-          {t("songsHeaderPlace")}
-        </label>
+        <label style={{ fontSize: "14px", marginTop: "18px" }}>{t("songsHeaderPlace")}</label>
         <input
           value={place}
           onChange={(e) => setPlace(e.target.value)}
@@ -179,9 +174,7 @@ function EditSongPageInner() {
         />
 
         {/* メモ */}
-        <label style={{ fontSize: "14px", marginTop: "18px" }}>
-          {t("songsHeaderMemo")}
-        </label>
+        <label style={{ fontSize: "14px", marginTop: "18px" }}>{t("songsHeaderMemo")}</label>
         <textarea
           value={memo}
           onChange={(e) => setMemo(e.target.value)}
@@ -228,16 +221,8 @@ const inputStyle = {
   width: "100%",
   padding: "10px 14px",
   borderRadius: "10px",
-  border: "1px solid "#bbb",
+  border: "1px solid #bbb",
   fontSize: "15px",
   marginTop: "6px",
   background: "#fff",
 };
-
-export default function EditSongPage() {
-  return (
-    <Suspense fallback={<div />}>
-      <EditSongPageInner />
-    </Suspense>
-  );
-}

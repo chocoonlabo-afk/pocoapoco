@@ -1,13 +1,12 @@
-// src/app/songs/new/page.js
 "use client";
 export const dynamic = 'force-dynamic';
 export const fetchCache = "default-no-store";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState } from "react";
 import { t as translate, getLangFromStorage } from "../../lib/i18n";
 import { useRouter, useSearchParams } from "next/navigation";
 
-function NewSongPageInner() {
+export default function NewSongPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const childIdFromQuery = searchParams.get("childId") || "";
@@ -18,10 +17,10 @@ function NewSongPageInner() {
   const [lang, setLang] = useState("jp");
 
   const [composer, setComposer] = useState("");
-  const [title, setTitle] = useState("");
-  const [date, setDate] = useState("");
-  const [place, setPlace] = useState("");
-  const [memo, setMemo] = useState("");
+  const [title, setTitle] = useState(""); 
+  const [date, setDate] = useState(""); 
+  const [place, setPlace] = useState(""); 
+  const [memo, setMemo] = useState(""); 
 
   const t = (key) => translate(key, lang);
 
@@ -148,7 +147,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "999px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 12px",
               fontSize: "14px",
             }}
@@ -184,7 +183,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -211,7 +210,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -237,7 +236,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -264,7 +263,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -291,7 +290,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
               resize: "vertical",
@@ -312,7 +311,7 @@ function NewSongPageInner() {
             onClick={handleCancel}
             style={{
               borderRadius: "999px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 18px",
               fontSize: "13px",
               background: "#fff",
@@ -337,13 +336,5 @@ function NewSongPageInner() {
         </div>
       </form>
     </main>
-  );
-}
-
-export default function NewSongPage() {
-  return (
-    <Suspense fallback={<div />}>
-      <NewSongPageInner />
-    </Suspense>
   );
 }
