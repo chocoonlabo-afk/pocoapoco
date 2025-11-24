@@ -184,7 +184,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -211,7 +211,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -237,7 +237,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -264,7 +264,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
             }}
@@ -291,7 +291,7 @@ function NewSongPageInner() {
             style={{
               width: "100%",
               borderRadius: "8px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 10px",
               fontSize: "14px",
               resize: "vertical",
@@ -312,7 +312,7 @@ function NewSongPageInner() {
             onClick={handleCancel}
             style={{
               borderRadius: "999px",
-              border: "1px solid "#ccc",
+              border: "1px solid #ccc",
               padding: "8px 18px",
               fontSize: "13px",
               background: "#fff",

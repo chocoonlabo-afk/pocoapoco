@@ -136,7 +136,7 @@ function EditSongPageInner() {
           background: "#fff",
           padding: "24px",
           borderRadius: "16px",
-          border: "1px solid "#eee",
+          border: "1px solid #eee",
         }}
       >
         {/* 作曲者 */}
@@ -228,7 +228,7 @@ const inputStyle = {
   width: "100%",
   padding: "10px 14px",
   borderRadius: "10px",
-  border: "1px solid "#bbb",
+  border: "1px solid #bbb",
   fontSize: "15px",
   marginTop: "6px",
   background: "#fff",
